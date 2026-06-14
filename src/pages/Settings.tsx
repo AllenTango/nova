@@ -18,11 +18,9 @@ import {
   IconButton,
 } from "@mui/material";
 import {
-  Add as AddIcon,
   ArrowBack as BackIcon,
-  Delete as DeleteIcon,
   SatelliteAlt as BeaconIcon,
-  CheckCircleOutline as SyncIcon,
+  LinkOff as DisconnectIcon,
 } from "@mui/icons-material";
 import OrbitRing from "../components/OrbitRing";
 import {
@@ -255,11 +253,11 @@ export default function SettingsPage({
     // an obviously-empty key (when required) is just a wasted round
     // trip to the upstream.
     if (opt.apiKeyRequired && !pickerApiKey.trim()) {
-      setPickerModelsError("请先填写 API Key 再获取模型");
+      setPickerModelsError("请先填接入密钥再扫描频段");
       return;
     }
     if (!pickerBaseUrl.trim()) {
-      setPickerModelsError("请先填写 Base URL 再获取模型");
+      setPickerModelsError("请先填 Base URL 再扫描频段");
       return;
     }
     setPickerModelsLoading(true);
@@ -284,7 +282,7 @@ export default function SettingsPage({
       });
       setPickerModels(list);
       if (list.length === 0) {
-        setPickerModelsError("未获取到任何模型，请检查 API Key 或 Base URL");
+        setPickerModelsError("未收到信号，请检查接入密钥或 Base URL");
       }
     } catch (e) {
       setPickerModelsError(e instanceof Error ? e.message : String(e));
@@ -301,7 +299,7 @@ export default function SettingsPage({
       return;
     }
     if (opt.apiKeyRequired && !pickerApiKey.trim()) {
-      setPickerError("请填写 API Key");
+      setPickerError("请填接入密钥");
       return;
     }
     if (!pickerBaseUrl.trim()) {
@@ -459,20 +457,20 @@ export default function SettingsPage({
               模型供应商
             </Typography>
             <Typography variant="caption" sx={{ color: t.starDim }}>
-              已配置的供应商列表，存储在{" "}
+              已配置的链路列表，存储在{" "}
               <Box component="code" sx={{ fontFamily: FONT.mono, color: t.starFaint }}>
                ~/.nova/config.json
              </Box>
-             。点击「添加」配置新供应商。
+             。点击「调谐信标」接入新链路。
             </Typography>
           </Box>
           <Button
             variant="contained"
-            startIcon={<AddIcon />}
             onClick={openPicker}
+            startIcon={<BeaconIcon />}
             sx={{ flexShrink: 0, ml: 2 }}
           >
-            添加
+            调谐信标
           </Button>
         </Box>
 
@@ -483,9 +481,14 @@ export default function SettingsPage({
             row shows label / id / source chip / base_url / model. */}
         <Box sx={{ display: "grid", mb: 4 }}>
           {providers.length === 0 && !providersError && (
-            <Typography variant="caption" sx={{ color: t.starFaint, py: 3 }}>
-              暂无供应商，点击右上「添加」配置第一个。
-            </Typography>
+            <Box sx={{ py: 4, display: "flex", flexDirection: "column", gap: 1.5, alignItems: "flex-start" }}>
+              <Typography variant="body2" sx={{ color: t.starDim }}>
+                天文台尚未调谐任何链路。
+              </Typography>
+              <Typography variant="caption" sx={{ color: t.starFaint }}>
+                点击右上「调谐信标」配置第一个供应商，副官才能开始通讯。
+              </Typography>
+            </Box>
           )}
           {providers.map((p) => (
             <Box
@@ -499,6 +502,12 @@ export default function SettingsPage({
                 borderBottom: `1px solid ${t.border}`,
               }}
             >
+              {/* Status ring — every listed provider is at minimum
+                  "active" (has a configured secret in ~/.nova/config.json).
+                  The `locked` state belongs to whichever provider the
+                  AI 副官 is currently bound to; that decision lives in
+                  AIChatPanel so we just render "active" here. */}
+              <OrbitRing status="active" size={10} sx={{ ml: 0.5 }} />
               <Typography sx={{ fontWeight: 500, color: t.star, fontSize: "0.95rem" }}>
                 {p.label}
               </Typography>
@@ -535,9 +544,9 @@ export default function SettingsPage({
                   size="small"
                   onClick={() => handleRemoveProvider(p.id)}
                   sx={{ color: t.starDim }}
-                  title="删除该供应商"
+                  title="断开连接"
                 >
-                  <DeleteIcon fontSize="small" />
+                  <DisconnectIcon fontSize="small" />
                 </IconButton>
               )}
             </Box>
@@ -545,6 +554,10 @@ export default function SettingsPage({
         </Box>
 
         {/* ── Port settings (auto-saved on change) ──────────── */}
+        {/* Two side-by-side inputs read as "coordinate dials". On sync
+            success a brief sync dot pulses to the right of each input,
+            reinforcing the "已同步至星图" feedback without a sticky
+            toast. */}
         <Typography variant="overline" sx={{ color: t.starFaint, display: "block", mb: 2 }}>
           应用设置
         </Typography>
@@ -560,6 +573,11 @@ export default function SettingsPage({
             }}
             size="small"
             sx={{ flex: 1 }}
+            slotProps={{
+              input: {
+                endAdornment: <SyncDot active={portsSynced} t={t} />,
+              },
+            }}
           />
           <TextField
             label="预览端口"
@@ -572,6 +590,11 @@ export default function SettingsPage({
             }}
             size="small"
             sx={{ flex: 1 }}
+            slotProps={{
+              input: {
+                endAdornment: <SyncDot active={portsSynced} t={t} />,
+              },
+            }}
           />
         </Box>
       </Box>
@@ -584,7 +607,7 @@ export default function SettingsPage({
         fullWidth
       >
         <DialogTitle sx={{ fontFamily: FONT.display, fontWeight: 400 }}>
-          添加
+          调谐信标
         </DialogTitle>
         <DialogContent dividers>
           {(() => {
@@ -607,9 +630,9 @@ export default function SettingsPage({
                 )}
 
                 <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-                  <InputLabel>供应商</InputLabel>
+                  <InputLabel>频段</InputLabel>
                   <Select
-                    label="供应商"
+                    label="频段"
                     value={pickerKind}
                     onChange={(e) =>
                       switchPickerKind(e.target.value as PickerKind)
@@ -706,7 +729,7 @@ export default function SettingsPage({
                   )}
 
                   <TextField
-                    label={opt.apiKeyRequired ? "API Key *" : "API Key（可选）"}
+                    label={opt.apiKeyRequired ? "接入密钥 *" : "接入密钥（可选）"}
                     type="password"
                     value={pickerApiKey}
                     onChange={(e) => setPickerApiKey(e.target.value)}
@@ -728,7 +751,7 @@ export default function SettingsPage({
                       {pickerModelsLoading ? (
                         <CircularProgress size={14} />
                       ) : (
-                        "获取模型列表"
+                        "扫描频段"
                       )}
                     </Button>
                     {pickerModels.length > 0 && (
@@ -736,7 +759,7 @@ export default function SettingsPage({
                         variant="caption"
                         sx={{ color: t.starDim, fontFamily: FONT.mono }}
                       >
-                        共 {pickerModels.length} 个模型
+                        共 {pickerModels.length} 个信号
                       </Typography>
                     )}
                   </Box>
@@ -751,7 +774,7 @@ export default function SettingsPage({
                         variant="caption"
                         sx={{ color: t.starFaint, display: "block", mb: 1 }}
                       >
-                        可用模型 · 点击选择一个
+                        信号强度 · 点击锁定一个
                       </Typography>
                       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, maxHeight: 200, overflowY: "auto" }}>
                         {pickerModels.map((m) => {
@@ -789,7 +812,7 @@ export default function SettingsPage({
                       variant="caption"
                       sx={{ color: t.starDim, display: "block" }}
                     >
-                      已选模型：
+                      已锁定：
                       <Box
                         component="span"
                         sx={{ fontFamily: FONT.mono, color: t.star, ml: 0.5 }}
@@ -821,10 +844,37 @@ export default function SettingsPage({
               pickerId.trim().length === 0
             }
           >
-            {pickerSubmitting ? "保存中…" : "保存"}
+            {pickerSubmitting ? "锁定中…" : "锁定"}
           </Button>
         </DialogActions>
       </Dialog>
     </Box>
+  );
+}
+
+/// Small status dot that pulses beside a port input after a successful
+/// sync. Reads as a single short beat — no toast, no flicker, just a
+/// momentary confirmation. `active` is true for ~1.4s after `autoSave`
+/// resolves; the keyframe runs once and the dot fades back to dim.
+function SyncDot({ active, t }: { active: boolean; t: typeof T.dark }) {
+  return (
+    <Box
+      aria-hidden
+      sx={{
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        mr: 1.5,
+        background: active ? t.nova : t.starFaint,
+        boxShadow: active ? `0 0 6px ${t.novaGlow}` : "none",
+        transition: "background 0.2s ease, box-shadow 0.2s ease",
+        animation: active ? "syncPulse 1.4s ease-out 1" : "none",
+        "@keyframes syncPulse": {
+          "0%": { transform: "scale(0.6)", opacity: 0.4 },
+          "20%": { transform: "scale(1.4)", opacity: 1 },
+          "100%": { transform: "scale(1)", opacity: 0.85 },
+        },
+      }}
+    />
   );
 }

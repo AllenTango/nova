@@ -12,13 +12,13 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  AutoAwesome as SparkIcon,
   Send as SendIcon,
   Close as CloseIcon,
   SwapHoriz as SwitchIcon,
 } from "@mui/icons-material";
 import { api, ProviderEntry, Settings, isTauri } from "../api/client";
 import { T, FONT } from "../theme";
+import OrbitRing from "./OrbitRing";
 import { useLocalAI } from "../hooks/useLocalAI";
 
 type PanelContext = {
@@ -183,7 +183,12 @@ export default function AIChatPanel({
           }}
         >
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <SparkIcon sx={{ fontSize: 16, color: t.nova }} />
+            {/* Locked ring — this is the AI 副官's currently bound
+                comm link. Per game-design §2.3 / §4.2, a pulsing locked
+                ring signals the active channel. */}
+            {activeOption && (
+              <OrbitRing status="locked" size={9} />
+            )}
             <Typography
               variant="overline"
               sx={{ color: t.starFaint, fontFamily: FONT.mono }}
