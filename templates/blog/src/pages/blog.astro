@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getPosts } from '../lib/posts';
+const posts = getPosts().filter((p) => p.data.type === 'blog');
+---
+<BaseLayout title="随笔" active="blog">
+  <section class="page-head"><h1>随笔</h1><p>文字留下轨道。</p></section>
+  <section class="grid-list">
+    {posts.map((post) => <a class="card" href={`/posts/${post.slug}/`}><h2>{post.data.title}</h2><p class="meta">{post.data.date.toLocaleDateString('zh-CN')}</p></a>)}
+  </section>
+</BaseLayout>

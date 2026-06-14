@@ -1,0 +1,22 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getPosts, getPostBySlug } from '../../lib/posts';
+
+export async function getStaticPaths() {
+  const posts = getPosts();
+  return posts.map((post) => ({ params: { slug: post.slug }, props: { post } }));
+}
+
+const { post: pathPost } = Astro.props;
+const post = pathPost ?? getPostBySlug(Astro.params.slug!);
+---
+<BaseLayout title={post.data.title} active={post.data.type === 'blog' ? 'blog' : post.data.type === 'vlog' ? 'vlog' : 'gallery'}>
+  <article class="prose">
+    <p class="meta">{post.data.type} · {post.data.date.toLocaleDateString('zh-CN')}</p>
+    <h1>{post.data.title}</h1>
+    {post.data.cover && <img class="cover" src={post.data.cover} alt="" />}
+    {post.data.video && <div class="video"><iframe src={post.data.video} loading="lazy" allowfullscreen></iframe></div>}
+    {post.data.photos && <div class="photo-grid">{post.data.photos.map((p) => <figure><img src={p.url} alt={p.caption ?? ''} loading="lazy" />{p.caption && <figcaption>{p.caption}</figcaption>}</figure>)}</div>}
+    <div>{post.body.split('\n\n').map((p) => <p>{p}</p>)}</div>
+  </article>
+</BaseLayout>

@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getPosts } from '../lib/posts';
+const posts = getPosts().filter((p) => p.data.type === 'vlog');
+---
+<BaseLayout title="影像" active="vlog">
+  <section class="page-head"><h1>影像</h1><p>把动态片段收进星图。</p></section>
+  <section class="grid-list">
+    {posts.map((post) => <a class="card" href={`/posts/${post.slug}/`}><h2>{post.data.title}</h2><p class="meta">{post.data.date.toLocaleDateString('zh-CN')}</p></a>)}
+  </section>
+</BaseLayout>

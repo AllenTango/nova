@@ -1,0 +1,29 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getPosts } from '../lib/posts';
+
+const allPosts = getPosts();
+const latest = allPosts.slice(0, 6);
+---
+
+<BaseLayout title="Nova Site" active="home">
+  <section class="hero">
+    <p class="eyebrow">Personal constellation</p>
+    <h1>把正在发生的事，点亮成一颗星。</h1>
+    <p class="lede">这里可以是博客、影像日志、相册，或者三者的混合。内容来自 Nova 管理的 Markdown。</p>
+  </section>
+
+  <section class="timeline">
+    {latest.map((post) => (
+      <a class="card" href={`/posts/${post.slug}/`}>
+        {post.data.cover && <img src={post.data.cover} alt="" loading="lazy" />}
+        <div>
+          <p class="meta">{post.data.type} · {post.data.date.toLocaleDateString('zh-CN')}</p>
+          <h2>{post.data.title}</h2>
+          {post.data.description && <p>{post.data.description}</p>}
+          <div class="tags">{post.data.tags.map((tag) => <span>{tag}</span>)}</div>
+        </div>
+      </a>
+    ))}
+  </section>
+</BaseLayout>

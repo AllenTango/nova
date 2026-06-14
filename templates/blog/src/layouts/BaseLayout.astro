@@ -1,0 +1,39 @@
+---
+import '../styles/site.css';
+
+interface Props {
+  title?: string;
+  active?: 'home' | 'blog' | 'vlog' | 'gallery' | 'about';
+}
+
+const { title = 'Nova Site', active = 'home' } = Astro.props;
+const nav = [
+  ['home', '/', '首页'],
+  ['blog', '/blog/', '随笔'],
+  ['vlog', '/vlog/', '影像'],
+  ['gallery', '/gallery/', '相册'],
+  ['about', '/about/', '关于'],
+] as const;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">✦ Nova</a>
+      <nav class="nav-links" aria-label="主导航">
+        {nav.map(([key, href, label]) => (
+          <a class:list={["nav-link", { active: active === key }]} href={href}>{label}</a>
+        ))}
+      </nav>
+    </header>
+    <main>
+      <slot />
+    </main>
+  </body>
+</html>

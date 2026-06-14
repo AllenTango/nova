@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getPosts } from '../lib/posts';
+const posts = getPosts().filter((p) => p.data.type === 'gallery');
+---
+<BaseLayout title="相册" active="gallery">
+  <section class="page-head"><h1>相册</h1><p>光影是另一种笔记。</p></section>
+  <section class="grid-list">
+    {posts.map((post) => <a class="card" href={`/posts/${post.slug}/`}><h2>{post.data.title}</h2><p class="meta">{post.data.date.toLocaleDateString('zh-CN')}</p></a>)}
+  </section>
+</BaseLayout>

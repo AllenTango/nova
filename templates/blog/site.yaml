@@ -1,0 +1,9 @@
+name: Nova Blog
+kind: site
+template: blog
+theme: dracula
+sections:
+  - blog
+  - vlog
+  - gallery
+  - about
