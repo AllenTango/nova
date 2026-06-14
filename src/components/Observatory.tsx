@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Box, Tooltip } from "@mui/material";
+import { Box, Tooltip, Typography } from "@mui/material";
 import { T, FONT } from "../theme";
+import OrbitRing from "./OrbitRing";
 import { api, ProjectInfo, Note, Post } from "../api/client";
 
 /**
@@ -112,6 +113,38 @@ export default function Observatory({
           tooltip={`连续书写天数 · 历史最长 ${stats.longest} 天`}
           t={t}
         />
+        <Divider t={t} />
+        {/* Milestone marker — pulses when the user crosses a 5-project
+            or first-deploy threshold. game-design §3.3. */}
+        <Tooltip
+          title={
+            stats.streak > 0
+              ? `当前连续 ${stats.streak} 天 · 下一个里程碑：${
+                  stats.streak >= 7 ? "30 天" : "7 天"
+                }`
+              : "开始第一个连续书写日"
+          }
+          placement="top"
+          arrow
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+            <OrbitRing
+              status={stats.streak > 0 ? "active" : "idle"}
+              size={9}
+            />
+            <Typography
+              variant="caption"
+              sx={{
+                fontFamily: FONT.mono,
+                fontSize: "0.7rem",
+                color: t.starFaint,
+                letterSpacing: "0.04em",
+              }}
+            >
+              里程碑
+            </Typography>
+          </Box>
+        </Tooltip>
       </Box>
     </Box>
   );

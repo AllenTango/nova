@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
@@ -117,6 +117,39 @@ export default function Dashboard({
   const notes = projects.filter((p) => p.kind === "note");
   const sites = projects.filter((p) => p.kind === "site");
 
+  // Per-project word count, so cards can show "新星 / 恒星 / 星港"
+  // stages (game-design §3.2). Parallel fetch — same shape as
+  // Observatory's tally but broken down by project id.
+  const [wordCounts, setWordCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, number> = {};
+      await Promise.all(
+        projects.map(async (p) => {
+          try {
+            if (p.kind === "note") {
+              const ns = await api.notes.list(p.path);
+              next[p.id] = ns.reduce((acc, n) => acc + countWords(n.content), 0);
+            } else {
+              const ps = await api.content.list(p.path);
+              next[p.id] = ps.reduce(
+                (acc, post) => acc + countWords(post.content),
+                0,
+              );
+            }
+          } catch {
+            // best-effort; leave undefined for failing projects
+          }
+        }),
+      );
+      if (!cancelled) setWordCounts(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projects]);
+
   return (
     <Box sx={{ position: "relative", minHeight: "100vh" }}>
       <Starfield />
@@ -195,6 +228,7 @@ export default function Dashboard({
                     <ProjectCard
                       key={p.id}
                       project={p}
+                      wordCount={wordCounts[p.id]}
                       onOpen={() => onSelectProject(p.id)}
                       onDelete={(e) => handleDelete(p.id, e)}
                       themeMode={themeMode}
@@ -219,6 +253,7 @@ export default function Dashboard({
                       <ProjectCard
                         key={p.id}
                         project={p}
+                        wordCount={wordCounts[p.id]}
                         onOpen={() => onSelectProject(p.id)}
                         onDelete={(e) => handleDelete(p.id, e)}
                         themeMode={themeMode}
@@ -572,4 +607,27 @@ function ActiveHero({
       </Button>
     </Box>
   );
+}
+
+/// Word count for a single Markdown blob. Counts CJK characters
+/// individually and Latin word runs by token. Mirrors Observatory's
+/// helper so dashboard stages and the bottom strip agree on totals.
+function countWords(s: string): number {
+  if (!s) return 0;
+  let n = 0;
+  let inLatin = false;
+  for (const ch of s) {
+    if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(ch)) {
+      if (inLatin) inLatin = false;
+      n += 1;
+    } else if (/[A-Za-z0-9]/.test(ch)) {
+      if (!inLatin) {
+        inLatin = true;
+        n += 1;
+      }
+    } else {
+      inLatin = false;
+    }
+  }
+  return n;
 }

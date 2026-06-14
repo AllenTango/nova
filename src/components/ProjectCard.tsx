@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Box, Typography, Card, CardContent, IconButton, Chip } from "@mui/material";
-import { Delete as DeleteIcon, Visibility as OpenIcon } from "@mui/icons-material";
+import { LinkOff as DisconnectIcon, Visibility as OpenIcon } from "@mui/icons-material";
 import { T } from "../theme";
+import OrbitRing from "./OrbitRing";
 import { ProjectInfo } from "../api/client";
 
 /**
@@ -16,27 +17,54 @@ import { ProjectInfo } from "../api/client";
  * A card whose id matches a `nova.flash.<id>` sessionStorage flag
  * (set by Dashboard on create) briefly plays a "first light" pulse —
  * the moment your star was born is acknowledged by the card itself.
+ *
+ * The stage label (game-design §3.2) follows project activity:
+ *
+ *   星尘  — 刚创建，无内容（来自 sessionStorage flash 而非 updated_at）
+ *   星胚  — 1-2 篇内容
+ *   新星  — 3+ 篇内容 / 1000+ 字
+ *   恒星  — 已升级为站点
+ *   星港  — 已部署（kind=site）
+ *
+ * `wordCount` is supplied by the Dashboard after it sums words across
+ * notes/posts for each project. Pass `undefined` to fall back to a
+ * purely activity-based label.
  */
-function magnitude(p: ProjectInfo) {
+function stageFor(p: ProjectInfo, wordCount: number | undefined): {
+  size: number;
+  flare: number;
+  label: string;
+  ringStatus: "idle" | "active" | "locked";
+} {
+  const isSite = p.kind === "site";
   const hours = (Date.now() / 1000 - p.updated_at) / 3600;
-  if (hours < 1) return { size: 1.6, flare: 1, label: "活跃" };
-  if (hours < 24) return { size: 1.3, flare: 0.7, label: "新" };
-  if (hours < 24 * 7) return { size: 1, flare: 0.35, label: "" };
-  return { size: 1, flare: 0.15, label: "" };
+  const wc = wordCount ?? 0;
+
+  if (isSite) {
+    if (wc >= 1000) return { size: 1.6, flare: 1, label: "星港", ringStatus: "locked" };
+    return { size: 1.4, flare: 0.85, label: "恒星", ringStatus: "locked" };
+  }
+  if (hours < 1) return { size: 1.5, flare: 1, label: "活跃", ringStatus: "active" };
+  if (hours < 24) return { size: 1.3, flare: 0.7, label: "新", ringStatus: "active" };
+  if (wc >= 1000) return { size: 1.2, flare: 0.5, label: "新星", ringStatus: "active" };
+  if (wc > 0) return { size: 1, flare: 0.3, label: "星胚", ringStatus: "active" };
+  return { size: 1, flare: 0.15, label: "星尘", ringStatus: "idle" };
 }
 
 export default function ProjectCard({
   project,
+  wordCount,
   onOpen,
   onDelete,
   themeMode,
 }: {
   project: ProjectInfo;
+  wordCount?: number;
   onOpen: () => void;
   onDelete: (e: React.MouseEvent) => void;
   themeMode: "dark" | "light";
 }) {
-  const m = magnitude(project);
+  const m = stageFor(project, wordCount);
   const t = T[themeMode];
   const isNote = project.kind === "note";
 
@@ -93,6 +121,14 @@ export default function ProjectCard({
 
       <CardContent sx={{ p: 0, "&:last-child": { pb: 0 } }}>
         <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, mb: 0.5 }}>
+          {/* Stage ring — every card has a ring indicating its
+              life-cycle stage. Locked for sites, active for fresh
+              notes, idle for empty dust. */}
+          <OrbitRing
+            status={m.ringStatus}
+            size={9}
+            sx={{ alignSelf: "center", mr: 0.5 }}
+          />
           <Typography
             variant="h5"
             sx={{
@@ -125,6 +161,7 @@ export default function ProjectCard({
           sx={{ display: "block", color: t.starFaint, mb: 2 }}
         >
           {isNote ? "笔记" : project.template} · {formatDate(project.updated_at)}
+          {wordCount !== undefined && wordCount > 0 && ` · ${wordCount} 字`}
         </Typography>
 
         <Box
@@ -151,8 +188,9 @@ export default function ProjectCard({
               e.stopPropagation();
               onDelete(e);
             }}
+            title="让星体退场"
           >
-            <DeleteIcon fontSize="small" />
+            <DisconnectIcon fontSize="small" />
           </IconButton>
         </Box>
       </CardContent>

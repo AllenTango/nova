@@ -193,7 +193,7 @@ export default function AIChatPanel({
               variant="overline"
               sx={{ color: t.starFaint, fontFamily: FONT.mono }}
             >
-              副官
+              副官 · 通讯链路
             </Typography>
             {activeOption && (
               <Typography variant="caption" sx={{ color: t.nova }}>
@@ -254,17 +254,40 @@ export default function AIChatPanel({
               )}
 
               <Box component="form" onSubmit={handleSend} sx={{ display: "grid", gap: 1.5 }}>
+                {/* Command-line style prompt — the `>` prefix reads
+                    as a terminal, signaling the chat is a side-channel
+                    rather than a chat bubble. */}
                 <TextField
                   multiline
                   minRows={3}
                   placeholder={
                     inProject
-                      ? "例如：帮我给这篇内容起一个更像博客标题的标题，或建议 3 个标签。输入 /switch 切换已配置供应商。"
-                      : "例如：我想做一个摄影日志，帮我起 5 个项目名字，并推荐一个模板。输入 /switch 切换已配置供应商。"
+                      ? "例如：帮我给这篇内容起一个更像博客标题的标题，或建议 3 个标签。\n输入 /switch 切换已配置供应商。"
+                      : "例如：我想做一个摄影日志，帮我起 5 个项目名字，并推荐一个模板。\n输入 /switch 切换已配置供应商。"
                   }
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   fullWidth
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <Box
+                          aria-hidden
+                          sx={{
+                            color: t.nova,
+                            fontFamily: FONT.mono,
+                            fontSize: "0.95rem",
+                            mr: 1,
+                            alignSelf: "flex-start",
+                            pt: 0.5,
+                            userSelect: "none",
+                          }}
+                        >
+                          &gt;
+                        </Box>
+                      ),
+                    },
+                  }}
                 />
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
@@ -282,13 +305,22 @@ export default function AIChatPanel({
                       </>
                     )}
                   </Box>
+                  {/* "发射" button — per game-design §4.2, a launch
+                      control that briefly charges on hover. */}
                   <Button
                     type="submit"
                     variant="contained"
                     endIcon={localAI?.isLoading ? <CircularProgress size={14} color="inherit" /> : <SendIcon />}
                     disabled={localAI?.isLoading || !input.trim()}
+                    sx={{
+                      transition: "all 0.2s ease",
+                      "&:hover": {
+                        boxShadow: `0 0 24px ${t.novaGlow}`,
+                        transform: "translateX(2px)",
+                      },
+                    }}
                   >
-                    发送
+                    发射
                   </Button>
                 </Box>
               </Box>
