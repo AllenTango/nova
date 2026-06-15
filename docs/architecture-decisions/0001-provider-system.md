@@ -1,4 +1,9 @@
-# Nova Provider System
+# ADR 0001: Nova Provider System
+
+> **Status**: ✅ Accepted | **Date**: 2026-06-15 | **Scope**: `src-tauri/src/provider/` + `src-tauri/src/providers/` + `src-tauri/src/nova_config.rs`
+>
+> 原文原位 `src-tauri/src/provider/NOVA_PROVIDER_DESIGN.md` 已迁移至此。
+> 历史上嘅 `EnvLoader` / `base_url_env_var` / `api_key_env_vars` 等 v1.0 已废弃设计全部省略，仅保留当前事实。
 
 ## 架构概览
 

@@ -6,18 +6,16 @@ import { api, ProjectInfo, Note, Post } from "../api/client";
 import { countWords } from "../lib/words";
 
 /**
- * "天文台" — a small permanent strip at the bottom of the Dashboard
- * that turns the user's activity into astronomical readings.
+ * "天文台"——Dashboard 底部一个常驻小条，把用户嘅活动转成天文读数。
  *
- * Reads:
- *  - star count (number of projects)
- *  - cumulative word count across all notes & posts
- *  - consecutive days of writing
- *  - longest streak
+ * 读取：
+ *  - 星数（项目数）
+ *  - 全部 notes & posts 嘅累计字数
+ *  - 连续写作天数
+ *  - 最长 streak
  *
- * The word count is the *new* number the user can watch grow — the
- * primary way a writer feels progress in a notes app. The streak is
- * the number that keeps them coming back tomorrow.
+ * 字数是用户能看着增长嘅*新*数字——写手在笔记 app 里感受进度
+ * 嘅主要方式。streak 是让他们明天再回来嘅数字。
  */
 export default function Observatory({
   projects,

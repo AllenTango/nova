@@ -35,15 +35,14 @@ interface Meteor {
 }
 
 /**
- * Signature element: a slow, breathing starfield with reactive bursts.
+ * 签名元素：缓慢呼吸嘅星空 + 事件触发嘅爆裂。
  *
- * Idle: slow breath of ~180 stars at 24fps.
- * On events (create / save / delete / upgrade) the canvas answers
- * with a particle burst or shockwave, originating from the
- * caller's coordinates. This turns a tool into a *conversation*
- * — every action of yours is acknowledged by the universe.
+ * 闲置：~180 颗星慢呼吸 24fps。
+ * 事件（create / save / delete / upgrade）触发时，画布用粒子爆裂
+ * 或冲击波回应，从调用方坐标发出。这把工具变成一场*对话*——
+ * 你嘅每个动作都会被宇宙应答。
  *
- * The 7th consecutive day opens a meteor shower.
+ * 连续第 7 天打开流星雨。
  */
 export default function Starfield({
   density = 0.00015,

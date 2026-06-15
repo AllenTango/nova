@@ -4,49 +4,42 @@ import { T, FONT } from "../theme";
 import { isTauri } from "../api/client";
 
 /**
- * Out-of-bounds gate.
+ * 越界 gate。
  *
- * In a **production build**, Nova's frontend is intended to be served
- * only inside the Tauri webview. If a user navigates here from an
- * external browser (e.g. `http://localhost:3847` typed into Chrome)
- * the Tauri runtime shims are missing, every invoke() would fail,
- * and the UI would silently render an empty project list.
+ * 在**生产构建**中，Nova 的前端仅设计为在 Tauri webview 内被加载。
+ * 如果用户从外部浏览器访问（如在 Chrome 输 `http://localhost:3847`），
+ * Tauri runtime shim 不存在，每个 invoke() 都会失败，UI 静默渲染
+ * 一个空项目列表。
  *
- * This gate catches that case at the very top of the React tree and
- * shows a single page that explains the situation and points the
- * user back at the desktop app.
+ * 此 gate 在 React 树最顶端拦住这种情况，展示一个说明页面，
+ * 引导用户回到桌面应用。
  *
- * In **development** (`npm run dev` via vite), the frontend is served
- * straight from the vite dev server on `localhost:1420` and *is*
- * meant to be opened in a browser. So we only enforce the gate in
- * production builds, identified by:
+ * 在**开发态**（vite 启动的 `npm run dev`），前端由 vite dev server
+ * 跑在 `localhost:1420`，本来就是要用浏览器打开。所以只在生产
+ * 构建里强制 gate，识别方式：
  *
  *   - `import.meta.env.PROD === true`
  *   - `import.meta.env.DEV  === false`
  *
- * The dev server never sets PROD, so this check is naturally false
- * during development and the gate stays invisible.
+ * dev server 永不设 PROD，所以这个 check 在开发态自然为 false，
+ * gate 保持隐形。
  *
- * Why not just `!isTauri()` alone? Because external browsers during
- * development are a legitimate use case — vite HMR needs them. The
- * DEV/PROD split keeps the dev experience smooth while still
- * hardening production.
+ * 为何不直接用 `!isTauri()`：因为 dev 期间用外部浏览器是合法场景
+ * —— vite HMR 需要它。DEV/PROD 切分既保开发体验顺滑，又加固生产。
  *
- * ## Dev preview bypass
+ * ## 开发态预览旁路
  *
- * The gate can be force-rendered in development for visual review by
- * appending `?preview-gate` to the URL:
+ * 开发态可通过 URL 追加 `?preview-gate` 强制渲染 gate 做视觉评审：
  *
- *   http://localhost:1420/?preview-gate           → show gate
- *   http://localhost:1420/?preview-gate=false     → never show gate
- *   http://localhost:1420/                        → normal dev (no gate)
+ *   http://localhost:1420/?preview-gate           → 显示 gate
+ *   http://localhost:1420/?preview-gate=false     → 不显示 gate
+ *   http://localhost:1420/                        → 正常 dev（不拦）
  *
- * This lets you screenshot the out-of-bounds screen without
- * rebuilding for production. The bypass is dev-only — in a prod
- * build the real `PROD && !isTauri()` check is what blocks.
+ * 这样无需为生产构建打包就能截到越界页面的图。旁路仅开发态有效
+ * ——生产构建里真正起作用的是 `PROD && !isTauri()` 这条检查。
  *
- * Implementation note: we use `window.location.search` rather than
- * `URLSearchParams` for size (the URL is parsed once on mount).
+ * 实现细节：用 `window.location.search` 而非 `URLSearchParams`
+ * （URL 只在 mount 时解析一次，少几行）。
  */
 function shouldBlock(): boolean {
   if (typeof window === "undefined") return false;

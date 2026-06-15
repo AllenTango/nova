@@ -3,22 +3,21 @@ import { Box, Typography } from "@mui/material";
 import { T, FONT } from "../theme";
 
 /**
- * First-launch opening ceremony.
+ * 首次启动嘅开场仪式。
  *
- * Plays once. After it has run, localStorage keeps a flag so we
- * never replay it on the same machine.
+ * 只播一次。播完后 localStorage 留个 flag，同一台机不再重播。
  *
- * Budget: ≤ 1.2 seconds end-to-end (game-design §5 motion budget).
+ * 预算：端到端 ≤ 1.2 秒（game-design §5 动效预算）。
  *
- * Sequence (~1.1 seconds total):
- *   0.00s  blank void
- *   0.10s  point of light scales in (200ms ease-out)
- *   0.30s  wordmark "✦ nova" fades in (500ms ease-out)
- *   0.80s  whole overlay dissolves (300ms ease-in)
- *   1.10s  done — dashboard is revealed
+ * 时序（约 1.1 秒总时长）：
+ *   0.00s  黑屏虚空
+ *   0.10s  一颗光点缩放进入（200ms ease-out）
+ *   0.30s  wordmark "✦ nova" 渐入（500ms ease-out）
+ *   0.80s  整层覆盖淡出（300ms ease-in）
+ *   1.10s  完成——dashboard 显现
  *
- * For users with prefers-reduced-motion, the ceremony is
- * reduced to a single 150ms fade-in of the wordmark.
+ * 对开启 prefers-reduced-motion 嘅用户，仪式简化为 wordmark
+ * 一次性 150ms 渐入。
  */
 const STORAGE_KEY = "nova.intro.seen";
 const TOTAL_MS = 1100;

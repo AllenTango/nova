@@ -9,15 +9,14 @@ pub struct BuildResult {
     pub message: String,
 }
 
-/// Minimal deployment/build loop for v1:
-/// 1. Ensure the project is a site (has package.json)
-/// 2. Install deps if missing
-/// 3. Run `npm run build`
-/// 4. Return the dist/ directory path
+/// v1 的最小化部署/构建循环：
+/// 1. 确保项目是 site（有 package.json）
+/// 2. 没装依赖就装
+/// 3. 跑 `npm run build`
+/// 4. 返回 dist/ 目录路径
 ///
-/// This is deliberately "local export" first — enough to complete the
-/// loop from writing → preview → buildable artifact, before pushing to
-/// external platforms.
+/// 这刻意先做"本地导出"——在推到外部平台前，先跑通
+/// 写作 → 预览 → 可构建产物 整条链路。
 #[tauri::command]
 pub fn build_site(site_path: String) -> Result<BuildResult, String> {
     let path = PathBuf::from(&site_path);

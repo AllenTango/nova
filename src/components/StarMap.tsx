@@ -5,20 +5,19 @@ import { layoutStars } from "../lib/starmap-layout";
 import { formatWordMass, type StarStage } from "../lib/words";
 
 /**
- * True star-map rendering of projects (game-design §4.3).
+ * 项目嘅真·星图渲染（game-design §4.3）。
  *
- * Each project is rendered as an SVG star: a glow circle whose radius
- * reflects the project's stage (星尘 → 星港 grow outward), with an
- * orbit ring drawn around higher stages.
+ * 每个项目渲染成一颗 SVG 星：一个发光圆，半径反映项目阶段
+ * （星尘 → 星港 越外越大），高阶段外加一道轨道环。
  *
- * Pan:  drag with mouse → updates `offset` state.
- * Zoom: wheel up/down → updates `scale` clamped to [0.5, 3.0].
- * Hover: shows tooltip with title / kind / word count / updated date.
- * Click: opens the project via `onSelect`.
+ * 平移：鼠标拖拽 → 更新 `offset` state。
+ * 缩放：滚轮上下 → 更新 `scale`，clamp 在 [0.5, 3.0]。
+ * Hover：显示 tooltip，含 title / kind / 字数 / updated date。
+ * 点击：通过 `onSelect` 打开项目。
  *
- * Performance note: when N >= 100 projects we don't switch to canvas
- * (SVG handles 100 nodes fine in Chromium); we only skip the hover
- * label animation for that range to keep frame budget under 16ms.
+ * 性能注：当 N >= 100 个项目时我们不切到 canvas（Chromium 里 SVG
+ * 100 个节点应付得来）；只跳过该区间嘅 hover label 动画，帧预算
+ * 压在 16ms 以下。
  */
 
 const MIN_SCALE = 0.5;

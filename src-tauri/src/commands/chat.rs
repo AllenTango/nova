@@ -4,13 +4,14 @@ use crate::providers;
 use crate::provider::{ChatMessage, ChatRequest, ProviderFactory};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::Mutex;
 
 type SharedDatabase = Arc<Mutex<Database>>;
 
-/// Resolved credentials for an outbound AI call. Holds only the four
-/// fields ProviderFactory needs — no Settings baggage.
+/// 出站 AI 调用解析后的凭据。只装 `ProviderFactory` 需要的 4 个字段
+/// ——不附带 Settings 的额外负担。
 #[derive(Debug, Clone)]
 struct ResolvedTarget {
     provider: String,
@@ -25,16 +26,15 @@ pub struct ChatOverrides {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
-    /// Optional provider id from `~/.nova/config.json`. When set we
-    /// pull the api_key/base_url/model from the JSON entry instead of
-    /// the boot-time default.
+    /// `~/.nova/config.json` 里的 provider id（可选）。设置时
+    /// 我们从 JSON 条目里取 api_key/base_url/model，而不是用
+    /// 启动期默认值。
     pub provider_id: Option<String>,
 }
 
-/// Resolve provider credentials (provider + api_key + base_url) from
-/// the boot-time default and caller-supplied overrides. Model is NOT
-/// resolved here — callers that need a model (chat, test) apply their
-/// own check after calling this.
+/// 从启动期默认值和 overrides 解析 provider 凭据
+/// （provider + api_key + base_url）。不解析 model——需要 model 的
+/// 调用方（chat、test）自己解析完之后再校验。
 fn resolve_credentials(
     app: &tauri::AppHandle,
     overrides: Option<&ChatOverrides>,
@@ -103,8 +103,8 @@ fn resolve_credentials(
     Ok(target)
 }
 
-/// Build a `ResolvedTarget` from boot-time default and overrides.
-/// Requires a model to be set (from default, provider entry, or override).
+/// 从启动期默认值和 overrides 构造 `ResolvedTarget`。
+/// 要求 model 已设置（来自默认值、provider 条目或 override）。
 async fn resolve_target(
     app: &tauri::AppHandle,
     _db: &Database,
@@ -174,14 +174,36 @@ pub async fn list_models(
     result
 }
 
+/// 流式 chat 事件。`#[serde(tag = "type", ...)]` 让线缆形态保持
+/// 扁平且向前兼容：新增事件变体只是纯加法，JS 端永远走默认分支
+/// 不会爆。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatEvent {
+    /// 收到上游模型推送的新文本 delta。前端追加到当前 assistant 气泡。
+    Delta { text: String },
+    /// 流正常结束。携带 usage 用于成本跟踪。
+    Done { usage: Option<crate::provider::Usage> },
+    /// 流以错误信息中止。永远是终态——前端清空半截气泡并显示错误。
+    Error { message: String },
+}
+
+/// 流式 AI chat。`on_event` channel 是前端接收响应的唯一途径——
+/// 本命令无返回值（JS 端从 `Delta` 拼出完整文本，缺失 `Done` 视为错误）。
+///
+/// 取代旧的单次 `ai_chat`（返回 `String`，需要 webview 经独立
+/// HTTP 端点 `/v1/chat/completions` 走 Rust）。该 HTTP server 仍
+/// 挂载给外部消费者（MCP 客户端、curl、OpenAI SDK），但内部流量
+/// 留在进程内。
 #[tauri::command]
 pub async fn ai_chat(
     prompt: String,
     system_prompt: Option<String>,
     overrides: Option<ChatOverrides>,
+    on_event: Channel<ChatEvent>,
     db: State<'_, SharedDatabase>,
     app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let target = {
         let db = db.lock().await;
         resolve_target(&app, &db, overrides).await?
@@ -207,60 +229,46 @@ pub async fn ai_chat(
         content: prompt,
     });
 
-    let response = client.chat(ChatRequest {
+    let request = ChatRequest {
         messages,
         model: target.model,
         temperature: Some(0.7),
         max_tokens: Some(2048),
-    })?;
-
-    Ok(response.content)
-}
-
-#[tauri::command]
-pub async fn test_ai_provider(
-    overrides: Option<ChatOverrides>,
-    db: State<'_, SharedDatabase>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let target = {
-        let db = db.lock().await;
-        resolve_target(&app, &db, overrides).await?
+        stream: true,
     };
 
-    if target.api_key.as_deref().map(|s| s.is_empty()).unwrap_or(true) {
-        return Err("API Key 不能为空".to_string());
+    // 流式客户端底层用 `reqwest::blocking`，所以必须在 blocking
+    // 线程跑——在 Tauri async runtime 上跑 blocking I/O 会卡住
+    // 所有其他 command。
+    let on_event_clone = on_event.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        client.chat_stream(request, &mut |delta: &str| -> Result<(), String> {
+            on_event_clone
+                .send(ChatEvent::Delta {
+                    text: delta.to_string(),
+                })
+                .map_err(|e| format!("channel 发送失败：{e}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("blocking task 失败：{e}"))?;
+
+    match result {
+        Ok(response) => {
+            // 尽力发送的最终事件。如果 channel 已关（如 webview
+            // 流中途跳走），就静默丢弃——反正没人听了。
+            let _ = on_event.send(ChatEvent::Done { usage: response.usage });
+        }
+        Err(e) => {
+            let _ = on_event.send(ChatEvent::Error { message: e });
+        }
     }
-    if target
-        .base_url
-        .as_deref()
-        .map(|s| s.trim().is_empty())
-        .unwrap_or(true)
-    {
-        return Err("Base URL 不能为空，请填写 API 端点地址".to_string());
-    }
 
-    let client = ProviderFactory::create_client(
-        &target.provider,
-        target.api_key.as_deref(),
-        target.base_url.as_deref(),
-    )?;
-
-    let response = client.chat(ChatRequest {
-        messages: vec![ChatMessage {
-            role: "user".to_string(),
-            content: "Reply with exactly: NOVA_PROVIDER_OK".to_string(),
-        }],
-        model: target.model.clone(),
-        temperature: Some(0.0),
-        max_tokens: Some(32),
-    })?;
-
-    Ok(response.content)
+    Ok(())
 }
 
-/// Used by the Settings UI to populate the chat picker. Mirrors the
-/// boot-time default — `None` when nothing has been marked default.
+/// Settings UI 用此填充 chat 切换器。镜像启动期默认值——
+/// 未标记默认时返回 `None`。
 #[tauri::command]
 pub async fn get_default_target_cmd(
     app: tauri::AppHandle,

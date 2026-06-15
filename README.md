@@ -85,18 +85,16 @@ nova/
 ├── src-tauri/              # Rust 后端
 │   ├── nova_config.rs      # 统一配置读写 (~/.nova/config.json)
 │   ├── commands/
-│   │   ├── sites.rs        # 项目管理
-│   │   ├── notes.rs        # 纯笔记 CRUD
-│   │   ├── content.rs      # 站点内容管理
-│   │   ├── chat.rs         # AI 对话 + 模型列表
+│   │   ├── sites.rs        # 项目管理（note + site）
+│   │   ├── chat.rs         # AI 对话 + 模型列表（v1.x：Tauri IPC + Channel<ChatEvent> 流式）
 │   │   ├── providers.rs    # 供应商 CRUD
 │   │   ├── settings.rs     # 端口设置
 │   │   └── deploy.rs
-│   ├── provider/           # AI 供应商传输层（openai/anthropic/google/ollama）
+│   ├── provider/           # AI 供应商传输层（openai/anthropic/google/ollama，4 provider 真 SSE override）
 │   ├── providers/          # 供应商列表组装（preset + user）
 │   ├── db/                 # SQLite 数据库
-│   ├── http_server/        # HTTP API 服务器
-│   └── mcp/                # MCP 协议
+│   ├── http_server/        # HTTP API 服务器（/health + /v1/chat/completions，未来 + /mcp）
+│   └── mcp/                # MCP 协议（计划中）
 ├── templates/             # 内置 Astro 模板
 ├── skills/                # 内置技能
 └── PLAN.md                # 完整方案文档
@@ -111,18 +109,31 @@ nova/
 
 ## Agent 集成
 
-Nova 作为 MCP Server 暴露能力，外部 AI 工具可通过 MCP 协议调用：
+Nova webview ↔ Rust backend 全走 **Tauri 2 IPC**（`#[tauri::command]` + `tauri::ipc::Channel<T>` 流式）。Nova ↔ **外部** AI 客户端走 **OpenAI 兼容 HTTP**（未来加 MCP Streamable HTTP）。
 
 ```json
 {
   "mcpServers": {
     "nova": {
       "type": "http",
-      "url": "http://localhost:3847/mcp"
+      "url": "http://localhost:18999/v1/chat/completions"
     }
   }
 }
 ```
+
+详见 [`docs/architecture-decisions/0002-chat-ipc-streaming.md`](docs/architecture-decisions/0002-chat-ipc-streaming.md) 和 [`PLAN.md`](PLAN.md)。
+
+## 文档
+
+| 文档 | 说明 |
+|---|---|
+| [`PLAN.md`](PLAN.md) | 项目方案总览（v1.x 状态） |
+| [`docs/game-design.md`](docs/game-design.md) | 游戏化视觉与交互规范 |
+| [`docs/design-tokens.md`](docs/design-tokens.md) | 设计 token 文档 |
+| [`docs/conventions/001-comments-zh-CN.md`](docs/conventions/001-comments-zh-CN.md) | 代码注释简体中文约定 |
+| [`docs/architecture-decisions/`](docs/architecture-decisions/) | ADR 索引（Provider、Chat IPC 等） |
+| [`AGENTS.md`](AGENTS.md) | **AI 协作者必读** |
 
 ## 许可证
 

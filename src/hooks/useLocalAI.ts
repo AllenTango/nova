@@ -1,9 +1,18 @@
 import { useState, useCallback, useRef } from "react";
-import type { ChatOverrides, Settings } from "../api/client";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import type { ChatOverrides } from "../api/client";
 
+/**
+ * 通过 Tauri IPC + Channel 的流式 chat。
+ *
+ * 历史：本 hook 之前通过 `http://localhost:{nova_port}/v1/chat/completions`
+ * 与 Rust 通信。这要求 Rust 端跑一个 axum server、webview 经 loopback
+ * 走一圈、前端手动解析 SSE wire 格式。全部已废弃——Rust 的 `ai_chat`
+ * command 现在走 in-process Channel 流式推送。HTTP server 仍保留给
+ * *外部* 客户端（MCP / curl / OpenAI SDK），内部流量全在 Tauri IPC
+ * 桥内部。
+ */
 export interface UseLocalAIOptions {
-  settings: Settings | null;
-  sessionToken: string;
   overrides?: ChatOverrides;
 }
 
@@ -12,18 +21,29 @@ interface AIMessage {
   content: string;
 }
 
-export function useLocalAI({ settings, sessionToken, overrides }: UseLocalAIOptions) {
+interface ChatDelta {
+  type: "delta";
+  text: string;
+}
+interface ChatDone {
+  type: "done";
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+interface ChatError {
+  type: "error";
+  message: string;
+}
+type ChatEvent = ChatDelta | ChatDone | ChatError;
+
+export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const baseUrl = `http://localhost:${settings?.nova_port ?? 18999}`;
-  // `model` here is the per-session override coming from the chat UI.
-  // When null, the Rust HTTP server falls back to the boot-time default
-  // (the model marked is_default in ~/.nova/config.json).
-  const model = overrides?.model || "";
+  // 追踪进行中的流调用。JS 端没法 `abort()` Tauri invoke，
+  // 但我们持有这个句柄，让 `stop()` 翻个 flag，Channel 回调
+  // 在追加文本前会检查。
+  const streamEpochRef = useRef(0);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -35,90 +55,55 @@ export function useLocalAI({ settings, sessionToken, overrides }: UseLocalAIOpti
       setIsLoading(true);
       setError(null);
 
-      // Abort any in-flight request
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
+      // 递增 epoch——上一次 sendMessage 的 in-flight channel 回调
+      // 会看到新 epoch 然后 bail out，把它持有的 delta 扔地上。
+      // 廉价的"软取消"，不依赖 abort IPC。
+      const epoch = ++streamEpochRef.current;
+
+      // 先追加一个空的 assistant 气泡，等 delta 来填。
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      const channel = new Channel<ChatEvent>();
+      let assistantContent = "";
+
+      channel.onmessage = (event) => {
+        if (epoch !== streamEpochRef.current) return; // 过期流，丢弃
+        if (event.type === "delta") {
+          assistantContent += event.text;
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: assistantContent,
+            };
+            return updated;
+          });
+        } else if (event.type === "error") {
+          setError(new Error(event.message));
+          // 移除空/半截 assistant 气泡。
+          setMessages((prev) => prev.slice(0, -1));
+          setIsLoading(false);
+        } else if (event.type === "done") {
+          setIsLoading(false);
+        }
+      };
 
       try {
-        // Forward overrides as-is — the Rust HTTP server pulls
-        // credentials from config.json when `provider_id` is present.
-        const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-          method: "POST",
-          signal: abortRef.current.signal,
-          headers: {
-            Authorization: `Bearer ${sessionToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [...messages, userMsg].map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            stream: true,
-            // The provider_id, base_url and family come from the
-            // switcher in AIChatPanel and are already in overrides.
-            provider_id: overrides?.provider_id,
-            provider: overrides?.provider,
-            base_url: overrides?.base_url,
-          }),
+        await invoke("ai_chat", {
+          prompt: text,
+          systemPrompt: null,
+          overrides: overrides ?? null,
+          onEvent: channel,
         });
-
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const decoder = new TextDecoder();
-        let assistantContent = "";
-
-        // Append assistant message placeholder
-        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n");
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const data = line.slice(6).trim();
-              if (data === "[DONE]") continue;
-              try {
-                const parsed = JSON.parse(data);
-                const delta = parsed.choices?.[0]?.delta?.content;
-                if (delta) {
-                  assistantContent += delta;
-                  setMessages((prev) => {
-                    const updated = [...prev];
-                    updated[updated.length - 1] = {
-                      role: "assistant",
-                      content: assistantContent,
-                    };
-                    return updated;
-                  });
-                }
-              } catch {
-                // Skip malformed JSON (common in SSE edge cases)
-              }
-            }
-          }
-        }
       } catch (e) {
-        if ((e as Error).name === "AbortError") return;
+        if (epoch !== streamEpochRef.current) return;
         const err = e instanceof Error ? e : new Error(String(e));
         setError(err);
-        // Remove failed assistant message
         setMessages((prev) => prev.slice(0, -1));
-      } finally {
         setIsLoading(false);
       }
     },
-    [baseUrl, model, messages, sessionToken, isLoading]
+    [isLoading, overrides]
   );
 
   const handleSubmit = useCallback(
@@ -137,7 +122,9 @@ export function useLocalAI({ settings, sessionToken, overrides }: UseLocalAIOpti
   );
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    // 软取消：递增 epoch 让 in-flight 的 channel 回调全部丢弃 delta。
+    // 真正的 Tauri 端 abort 需要服务端取消 token，目前没有。
+    streamEpochRef.current++;
     setIsLoading(false);
   }, []);
 

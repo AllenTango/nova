@@ -56,7 +56,8 @@ pub fn run() {
     let nova_port = config.nova_port;
     eprintln!("[DEBUG] nova_port = {}", nova_port);
 
-    // Wrap Database in Arc<Mutex<>> for thread-safe shared access (HTTP server + commands)
+    // 把 Database 包进 Arc<Mutex<>>，支持 HTTP server 和 commands
+    // 多个线程共享访问。
     let db_arc = Arc::new(Mutex::new(db));
     eprintln!("[DEBUG] db_arc wrapped OK");
 
@@ -83,7 +84,6 @@ pub fn run() {
             commands::notes::update_note,
             commands::notes::delete_note,
             commands::chat::ai_chat,
-            commands::chat::test_ai_provider,
             commands::chat::list_models,
             commands::deploy::build_site,
             commands::settings::get_settings,
@@ -107,8 +107,8 @@ pub fn run() {
             let db_state = app.state::<Arc<Mutex<Database>>>();
             let db = db_state.inner().blocking_lock();
             let _ = db.repair_project_paths(&repo_root, &nova_home);
-            // One-time cleanup of legacy settings keys from SQLite.
-            // Safe to run on every boot.
+            // 一次性清理 SQLite 里的遗留 settings key。
+            // 每次启动都跑都安全。
             commands::settings::purge_legacy_ai_keys(&db);
             drop(db);
 
@@ -117,7 +117,7 @@ pub fn run() {
 
             println!("Nova home: {:?}", nova_home);
 
-            // Start HTTP server in background
+            // 后台启动 HTTP server
             let db_for_server = db_arc.clone();
             let port = nova_port;
             let app_handle = app.handle().clone();

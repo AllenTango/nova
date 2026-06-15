@@ -1,10 +1,9 @@
 /**
- * Lightweight event bus.
+ * 轻量事件总线。
  *
- * The signature element of Nova is that every action you take
- * — saving, creating, upgrading, deleting — produces a moment
- * of astronomical response. To keep the wiring simple we use
- * a tiny pub/sub rather than Context or props drilling.
+ * Nova 嘅签名元素就是你嘅每个动作——保存、创建、升级、删除——
+ * 都产生一个天文响应瞬间。为保持接线简单，我们用一个小 pub/sub
+ * 而非 Context 或 props 透传。
  */
 
 export type NovaEvent =

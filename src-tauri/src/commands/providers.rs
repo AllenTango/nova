@@ -24,9 +24,8 @@ pub async fn remove_provider(app: AppHandle, id: String) -> Result<(), String> {
     providers::remove(&app, &id)
 }
 
-/// Resolve the API key for a provider id. Returns null if no key is
-/// configured. Frontend uses this when sending a chat request to
-/// populate the Authorization header.
+/// 解析某 provider id 的 API key。未配置时返回 null。
+/// 前端在发 chat 请求时用此填充 Authorization header。
 #[tauri::command]
 pub async fn resolve_provider_key(app: AppHandle, id: String) -> Result<Option<String>, String> {
     providers::resolve_api_key(&app, &id)

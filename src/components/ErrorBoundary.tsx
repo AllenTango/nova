@@ -10,11 +10,7 @@ interface State {
   error: Error | null;
 }
 
-/**
- * Top-level safety net. If a Tauri IPC call throws synchronously
- * during render (e.g. someone forgot to gate a query), we surface a
- * recoverable panel instead of leaving the whole tree blank.
- */
+/** 顶层安全网。如果 Tauri IPC 调用在 render 期间同步抛错（比如有人忘记 gate 一个 query），我们呈现一个可恢复面板，而不是让整棵树变白屏。 */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 

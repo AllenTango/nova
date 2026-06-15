@@ -1,26 +1,25 @@
-//! Provider registry backed by the unified `~/.nova/config.json`.
+//! Provider 注册表，数据后端是统一的 `~/.nova/config.json`。
 //!
-//! Mirrors the opencode model: providers live outside SQLite so adding
-//! or removing one is a single file edit and there is no DB migration
-//! when the schema changes. Two sources contribute:
+//! 镜像 opencode 的模型：providers 放在 SQLite 之外，
+//! 增删一个 provider 改一个文件就够，schema 变了也不用迁移 DB。
+//! 两个数据源：
 //!
-//!   1. User-added entries written by Settings → `add_provider` /
-//!      `remove_provider` commands. These persist to the JSON file.
-//!   2. Built-in presets (OpenAI / Anthropic / Google) from Rust's
-//!      static `PROVIDER_REGISTRY`. They appear in the list ONLY
-//!      when the user has stored a matching API key in
-//!      `config.json::provider_secrets` — otherwise they're hidden.
+//!   1. 用户添加的条目——由 Settings 里的 `add_provider` /
+//!      `remove_provider` 命令写入。会持久化到 JSON 文件。
+//!   2. 内置预设（OpenAI / Anthropic / Google）——来自 Rust 静态
+//!      `PROVIDER_REGISTRY`。仅当用户在
+//!      `config.json::provider_secrets` 里存了匹配的 API key
+//!      时才出现在列表里；否则隐藏。
 //!
-//! Credentials are read exclusively from `~/.nova/config.json`.
-//! Environment variables are NOT consulted.
+//! 凭据只从 `~/.nova/config.json` 读。环境变量不参与。
 //!
-//! The Settings page can add and remove user providers; the chat
-//! switcher can pick from either source.
+//! Settings 页可以增删用户 provider；chat 切换器可以从两个源
+//! 里任选。
 
 use crate::nova_config;
 use crate::provider::config::get_provider_config;
 
-// Re-export the types that command handlers and other modules consume.
+// 再导出给 command handler 和其他模块用的类型。
 pub use crate::nova_config::{
     FamilyKind, ModelEntry, NewProvider, PRESET_FAMILIES, ProviderEntry, ProviderSource,
     UpdateProvider,
@@ -42,13 +41,12 @@ fn make_preset_entry(family_id: &str) -> Option<ProviderEntry> {
     })
 }
 
-/// Compose the full provider list returned to the frontend.
+/// 拼出返回给前端的完整 provider 列表。
 ///
-/// Order:
-///   1. Presets — only when a matching API key exists in
-///      `provider_secrets`. Without a key the provider is unusable,
-///      so hidden.
-///   2. User-added entries — `OpenaiCompat` / `AnthropicCompat`.
+/// 顺序：
+///   1. 预设——仅当 `provider_secrets` 里有匹配的 API key。
+///      没 key 的 provider 不可用，所以隐藏。
+///   2. 用户添加的条目——`OpenaiCompat` / `AnthropicCompat`。
 pub fn list_all(app: &tauri::AppHandle) -> Result<Vec<ProviderEntry>, String> {
     let secrets = nova_config::read_secrets(app);
 
@@ -65,7 +63,7 @@ pub fn list_all(app: &tauri::AppHandle) -> Result<Vec<ProviderEntry>, String> {
     Ok(combined)
 }
 
-/// Append a new user provider. Returns the new entry on success.
+/// 追加一个新用户 provider。成功时返回新条目。
 pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, String> {
     let id = new.id.trim().to_string();
     if id.is_empty() {
@@ -117,7 +115,7 @@ pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, St
     Ok(entry)
 }
 
-/// Apply a partial update to an existing provider.
+/// 对已存在的 provider 应用部分更新。
 pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderEntry, String> {
     let id = patch.id.clone();
 
@@ -163,7 +161,7 @@ pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderE
     Ok(preset)
 }
 
-/// Remove a user provider and its secret.
+/// 删除一个用户 provider 及其密钥。
 pub fn remove(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     let mut providers = nova_config::read_providers(app);
     let before = providers.len();
@@ -176,11 +174,11 @@ pub fn remove(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Read a provider's API key.
+/// 读某 provider 的 API key。
 ///
-/// Resolution order (config.json ONLY — no env vars):
-/// 1. `provider_secrets` by exact id
-/// 2. None
+/// 解析顺序（只从 config.json，不读环境变量）：
+/// 1. `provider_secrets` 按精确 id 查
+/// 2. 没有
 pub fn resolve_api_key(app: &tauri::AppHandle, id: &str) -> Result<Option<String>, String> {
     let config = nova_config::read_config(app);
     Ok(config

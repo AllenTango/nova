@@ -9,8 +9,8 @@ use tokio::sync::Mutex;
 
 type SharedDatabase = Arc<Mutex<Database>>;
 
-/// Settings exposed to the frontend — read/written to the unified
-/// `~/.nova/config.json` via `nova_config`.
+/// 暴露给前端的 Settings——通过 `nova_config` 读写统一的
+/// `~/.nova/config.json`。
 pub use crate::nova_config::SettingsConfig as Settings;
 
 #[tauri::command]
@@ -23,9 +23,8 @@ pub async fn save_settings(settings: SettingsConfig, app: tauri::AppHandle) -> R
     nova_config::write_settings(&app, &settings)
 }
 
-/// One-shot DB cleanup: remove any of the legacy keys that used to
-/// live here before the provider registry moved out of SQLite.
-/// Safe to run on every boot.
+/// 一次性 DB 清理：删除 provider 注册表迁出 SQLite 之前那些
+/// 留在本表的遗留 key。每次启动都跑都安全。
 pub fn purge_legacy_ai_keys(db: &Database) {
     const LEGACY: &[&str] = &[
         "ai_provider",
@@ -50,7 +49,7 @@ pub async fn get_session_token(db: State<'_, SharedDatabase>) -> Result<String, 
         .ok_or_else(|| "No session token found".to_string())
 }
 
-/// Snapshot of the boot-time default, derived from providers list.
+/// 启动期默认值的快照，从 providers 列表派生。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DefaultTarget {
     pub provider_id: Option<String>,

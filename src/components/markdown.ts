@@ -1,17 +1,17 @@
 /**
- * Minimal offline Markdown → HTML renderer.
+ * 极简离线 Markdown → HTML 渲染器。
  *
- * Intentionally tiny — covers what the editor needs for live preview:
- *   - headings (#..######)
- *   - paragraphs
- *   - bold **x**, italic *x*, inline code `x`
- *   - links [t](u), images ![a](u)
- *   - unordered (-, *) and ordered (1.) lists
- *   - blockquotes (>)
- *   - fenced code (```)
- *   - horizontal rules (---)
+ * 故意保持很小——只覆盖编辑器实时预览需要的功能：
+ *   - 标题（#..######）
+ *   - 段落
+ *   - 粗体 **x**、斜体 *x*、行内代码 `x`
+ *   - 链接 [t](u)、图片 ![a](u)
+ *   - 无序列表（-, *）和有序列表（1.）
+ *   - 引用块（>）
+ *   - 围栏代码（```）
+ *   - 水平线（---）
  *
- * Output is XSS-safe: we escape HTML first, then apply our own formatting.
+ * 输出 XSS 安全：先转义 HTML，再施加我们自家格式。
  */
 
 function escapeHtml(s: string): string {
@@ -63,7 +63,7 @@ export function renderMarkdown(src: string): string {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code
+    // 围栏代码
     if (line.startsWith("```")) {
       flushParagraph(paraBuf);
       const lang = line.slice(3).trim();
@@ -80,7 +80,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Headings
+    // 标题
     const hMatch = line.match(/^(#{1,6})\s+(.*)$/);
     if (hMatch) {
       flushParagraph(paraBuf);
@@ -90,7 +90,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Horizontal rule
+    // 水平线
     if (/^-{3,}\s*$/.test(line) || /^\*{3,}\s*$/.test(line)) {
       flushParagraph(paraBuf);
       out.push(`<hr />`);
@@ -98,7 +98,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Blockquote
+    // 引用块
     if (line.startsWith("> ")) {
       flushParagraph(paraBuf);
       const quote: string[] = [];
@@ -110,7 +110,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Unordered list
+    // 无序列表
     if (/^[-*]\s+/.test(line)) {
       flushParagraph(paraBuf);
       const items: string[] = [];
@@ -122,7 +122,7 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Ordered list
+    // 有序列表
     if (/^\d+\.\s+/.test(line)) {
       flushParagraph(paraBuf);
       const items: string[] = [];
@@ -134,14 +134,14 @@ export function renderMarkdown(src: string): string {
       continue;
     }
 
-    // Empty line — paragraph break
+    // 空行——段落分隔
     if (line.trim() === "") {
       flushParagraph(paraBuf);
       i++;
       continue;
     }
 
-    // Default: paragraph accumulation
+    // 默认：段落累积
     paraBuf.push(line);
     i++;
   }

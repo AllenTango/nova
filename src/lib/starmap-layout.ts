@@ -1,25 +1,23 @@
 /**
- * StarMap layout algorithm.
+ * StarMap 布局算法。
  *
- * Deterministic scatter: each project's position is derived from its
- * `id` hash → (angle, radius), so the same project always lands on the
- * same spot, but projects added later don't make old ones jump.
+ * 确定性散点：每个项目的位置由其 `id` 哈希 → (角度, 半径) 推出，
+ * 所以同一个项目总落在同一位置，但后来加的项目不会让旧项目跳位。
  *
- * `nudge` resolves overlaps by walking forward through sorted projects
- * and pushing colliding pairs apart, keeping the cloud organic rather
- * than grid-like.
+ * `nudge` 通过按 id 排序后前向遍历并把碰撞对推开解决重叠，
+ * 让星云保持自然态而不是网格态。
  */
 
 import { massStageLabel, type WordMass } from "./words";
 
 export interface StarPosition {
-  /** Polar angle (radians) */
+  /** 极角（弧度） */
   angle: number;
-  /** Distance from origin (px) */
+  /** 到原点的距离（px） */
   radius: number;
 }
 
-/** djb2 string hash → stable integer. */
+/** djb2 字符串哈希 → 稳定整数。 */
 export function hashId(id: string): number {
   let h = 5381;
   for (let i = 0; i < id.length; i++) {
@@ -29,18 +27,17 @@ export function hashId(id: string): number {
 }
 
 /**
- * Compute a stable polar position for a project.
+ * 计算一个项目嘅稳定极坐标位置。
  *
- * The radius is keyed off the project's "mass" (stage), so higher-stage
- * projects drift toward the center (the inner solar system) while
- * dust-stage projects scatter into the outer ring.
+ * 半径由项目嘅"mass"（阶段）决定——高阶段项目偏向中心
+ * （内太阳系），星尘阶段项目散到外环。
  *
- * Stage → band:
- *   星尘 (0)   → 320–460 px
- *   星胚 (1+)  → 240–340 px
- *   新星 (1k+) → 140–240 px
- *   恒星       → 80–160 px  (site)
- *   星港       → 0–90 px    (site + 1000+ words)
+ * 阶段 → 半径带：
+ *   星尘 (0)    → 320–460 px
+ *   星胚 (1+)   → 240–340 px
+ *   新星 (1k+)  → 140–240 px
+ *   恒星        → 80–160 px  （site）
+ *   星港        → 0–90 px    （site + 1000+ 字）
  */
 export function positionFor(id: string, mass: WordMass): StarPosition {
   const h = hashId(id);
@@ -69,11 +66,10 @@ function massBand(m: WordMass): [number, number] {
 }
 
 /**
- * Resolve overlapping positions by nudging colliding points outward
- * along their bisector. Runs at most `MAX_PASSES` iterations to keep
- * the layout stable on large project counts.
+ * 通过把碰撞点沿角平分线向外推来解重叠。
+ * 最多跑 `MAX_PASSES` 轮迭代，保证项目数量大时也稳定。
  *
- * @returns a map from project.id → {x, y} in SVG user-space coords
+ * @returns project.id → {x, y}，SVG user-space 坐标
  */
 export function layoutStars(
   items: ReadonlyArray<{ id: string; mass: WordMass }>,
@@ -117,11 +113,7 @@ export function layoutStars(
   return positions;
 }
 
-/**
- * Compute a star's mass from a numeric word count, wrapping the
- * existing `massStageLabel` helper so callers don't need to import
- * the words module twice.
- */
+/** 由字数计算 star mass，包装 `massStageLabel`，调用方免去二次 import words 模块。 */
 export function massFromWordCount(n: number): WordMass {
   return { count: n, stage: massStageLabel(n) };
 }

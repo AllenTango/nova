@@ -4,14 +4,13 @@ import { T, FONT } from "../theme";
 import { renderMarkdown } from "./markdown";
 
 /**
- * Live Markdown preview pane.
+ * 实时 Markdown 预览面板。
  *
- * Two layers of work avoidance:
- *  1. We debounce the source by ~120ms — while the user is actively
- *     typing we don't need to re-render on every keystroke.
- *  2. We wrap `dangerouslySetInnerHTML` in a `useRef` + manual set;
- *     React's diff on a large innerHTML string was the single biggest
- *     source of editor jitter on long documents.
+ * 两层避重：
+ *  1. 源文 debounce ~120ms——用户正在打字时不需要每次按键都重渲染。
+ *  2. `dangerouslySetInnerHTML` 包进 `useRef` + 手动 set；
+ *     React 对大段 innerHTML 字符串做 diff 是长文档编辑器抖动
+ *     嘅最大单一来源。
  */
 export default function MarkdownPreview({
   source,

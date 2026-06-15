@@ -17,9 +17,8 @@ use crate::providers;
 
 pub struct HttpServerState {
     pub db: Arc<Mutex<Database>>,
-    /// Tauri AppHandle so we can resolve provider secrets. Wrapped in
-    /// `Option` because the http server is also constructed in unit
-    /// tests; production code always sets it.
+    /// Tauri AppHandle 用于解析 provider 凭据。包成 `Option` 是因为
+    /// 单元测试也会构造 http server；生产代码总会设置它。
     pub app: Option<tauri::AppHandle>,
 }
 
@@ -51,11 +50,10 @@ struct ResolvedTarget {
     model: String,
 }
 
-/// Build the boot-time default target from `~/.nova/config.json`,
-/// then optionally overwrite with the `provider_id` field of the
-/// incoming request body. Returns Err when no default has been
-/// configured — the chat endpoint surfaces that as a 4xx/5xx so the
-/// caller knows to ask the user to configure a default first.
+/// 从 `~/.nova/config.json` 构造启动期默认 target，
+/// 然后用请求 body 里的 `provider_id` 字段（可选）覆盖。
+/// 未配置默认值时返回 Err——chat 端点把这个错误以 4xx/5xx 透出，
+/// 告诉调用方先去配置默认值。
 async fn resolve_target(
     app: Option<&tauri::AppHandle>,
     body_json: &serde_json::Value,
@@ -82,8 +80,8 @@ async fn resolve_target(
         }
     }
 
-    // Provider-id override from the request body — pull a different
-    // configured provider without changing the boot-time default.
+    // 请求 body 里的 provider-id 覆盖——不改动启动期默认
+    // 即可切到另一个已配置的 provider。
     if let Some(pid) = body_json
         .get("provider_id")
         .and_then(|v| v.as_str())
@@ -129,7 +127,7 @@ async fn chat_completions_handler(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    // 1. Verify session token
+    // 1. 校验 session token
     let token = match extract_bearer_token(&headers) {
         Some(t) => t,
         None => {
@@ -161,8 +159,8 @@ async fn chat_completions_handler(
         }
     };
 
-    // 3. Resolve target — boot-time default from config.json,
-    //    optionally overwritten by `provider_id` in the request body.
+    // 3. 解析 target——从 config.json 拿启动期默认，
+    //    可选地被请求 body 里的 `provider_id` 覆盖。
     let target = match resolve_target(state.app.as_ref(), &body_json).await {
         Ok(t) => t,
         Err(e) => {
@@ -173,7 +171,7 @@ async fn chat_completions_handler(
         }
     };
 
-    // 4. Extract request parameters
+    // 4. 提取请求参数
     let model = body_json["model"].as_str().unwrap_or(&target.model);
     let messages: Vec<ChatMessage> = body_json["messages"]
         .as_array()
@@ -198,6 +196,7 @@ async fn chat_completions_handler(
         messages,
         temperature: Some(0.7),
         max_tokens: Some(2048),
+        stream,
     };
 
     let client = match ProviderFactory::create_client(
@@ -249,7 +248,7 @@ async fn chat_completions_handler(
             }
         }
     } else {
-        // 6. Streaming SSE
+        // 6. 流式 SSE
         let chat_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
         let model_str = model.to_string();
         let provider = target.provider;
@@ -395,7 +394,7 @@ async fn run_stream(
         }
     }
 
-    // Send final chunk
+    // 发送终止 chunk
     let final_json = serde_json::json!({
         "id": chat_id,
         "object": "chat.completion.chunk",

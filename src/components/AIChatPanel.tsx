@@ -30,14 +30,10 @@ type PanelContext = {
   content?: string;
 };
 
-// Stable shim used when real settings haven't loaded yet — keeps the
-// useLocalAI hook order deterministic so React doesn't throw
-// "Rendered more hooks than during the previous render."
-const EMPTY_SETTINGS: Settings = {
-  nova_port: 18999,
-  preview_port: 4321,
-  theme: "dark",
-};
+// useLocalAI no longer needs Settings or a session token — Tauri IPC
+// handles auth internally. The old EMPTY_SETTINGS shim is kept here
+// only because `Settings` is still imported elsewhere in the file;
+// remove it once that import goes away.
 
 export default function AIChatPanel({
   themeMode,
@@ -53,21 +49,16 @@ export default function AIChatPanel({
   const [options, setOptions] = useState<ProviderEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [showSwitcher, setShowSwitcher] = useState(false);
-  const [sessionToken, setSessionToken] = useState<string>("");
   const [, setSystemPrompt] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Fetch in parallel — Settings (for nova_port + sessionToken) and
-    // the provider list. We only block the chat switcher on the
-    // providers list; everything else stays optimistic.
+    // 拉 Settings（用来 gate 系统 prompt 构建和发送 handler）和
+    // provider 列表（chat 切换器用）。session token 唔再用——
+    // IPC auth 由 Tauri webview 内部处理。
     api.settings
       .get()
-      .then((s) => {
-        setSettings(s);
-        return api.settings.getSessionToken();
-      })
-      .then((token) => setSessionToken(token))
+      .then((s) => setSettings(s))
       .catch(() => {});
     api.providers
       .list()
@@ -84,7 +75,7 @@ export default function AIChatPanel({
     [options, selectedId]
   );
 
-  // Build system prompt from context
+  // 从 context 拼出系统 prompt
   useEffect(() => {
     if (!settings) return;
     const parts = [
@@ -115,28 +106,24 @@ export default function AIChatPanel({
     return false;
   };
 
-  // useLocalAI for streaming chat. The hook must always be called in
-  // the same order every render, so we feed it a stable default
-  // settings shim before real settings load — `useLocalAI` itself
-  // treats empty/disabled settings as "no chat possible" and stays
-  // inert until the real ones arrive.
+  // 流式 chat。Tauri 2 IPC + Channel——hook 不再需要 Settings
+  // （无 localhost 端口要 dial）也不需要 sessionToken（IPC 走
+  // Tauri webview 自带的权限模型）。只需要 provider override 让
+  // Rust 从密钥文件取正确凭据。
   const localAI = useLocalAI({
-    settings: settings ?? EMPTY_SETTINGS,
-    sessionToken,
     overrides: activeOption
       ? {
           provider: activeOption.family,
           model: activeOption.model,
           base_url: activeOption.base_url,
-          // Hand the Rust side the registry id; it pulls the api_key
-          // from the secrets file (or env) so the frontend never sees
-          // the credential in plaintext.
+          // 把 registry id 交给 Rust 端，它从密钥文件里取 api_key，
+          // 这样前端永远不会以明文接触凭据。
           provider_id: activeOption.id,
         }
       : undefined,
   });
 
-  // Auto-scroll the ship's log to the latest entry as it streams in.
+  // 流式期间自动滚到最新一条。
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localAI.messages, localAI.isLoading]);
@@ -148,7 +135,7 @@ export default function AIChatPanel({
       setInput("");
       return;
     }
-    // Submit to useChat - the hook handles streaming internally
+    // 提交给 useChat——流式由 hook 内部处理。
     localAI.handleSubmit(e);
     setInput("");
   };

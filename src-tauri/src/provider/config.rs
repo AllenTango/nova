@@ -3,37 +3,37 @@ pub enum AuthType {
     ApiKey,
 }
 
-/// Transport type determines the API protocol
+/// 传输类型决定 API 协议
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportType {
-    OpenAIChat,          // POST /v1/chat/completions, Bearer token
-    AnthropicMessages,   // POST /v1/messages, x-api-key header
-    GoogleGenerative,    // POST /v1beta/models/...:generateContent, API key in query
-    OllamaNative,        // POST /api/chat
+    OpenAIChat,        // POST /v1/chat/completions，Bearer token
+    AnthropicMessages, // POST /v1/messages，x-api-key header
+    GoogleGenerative,  // POST /v1beta/models/...:generateContent，API key 走 query
+    OllamaNative,      // POST /api/chat
 }
 
-/// Provider configuration with default URLs and env var names
+/// Provider 配置：默认 URL 和环境变量名
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
-    /// Unique identifier (e.g., "openai", "anthropic", "google")
+    /// 唯一标识（如 "openai" / "anthropic" / "google"）
     pub id: &'static str,
-    /// Human-readable name
+    /// 用户可见名称
     pub name: &'static str,
-    /// Authentication type
+    /// 鉴权类型
     pub auth_type: AuthType,
-    /// Default base URL for API requests
+    /// API 请求的默认 base URL
     pub default_base_url: &'static str,
-    /// Environment variable for base_url override (e.g., "OPENAI_BASE_URL")
+    /// base_url 覆盖用环境变量名（如 "OPENAI_BASE_URL"）
     pub base_url_env_var: Option<&'static str>,
-    /// Environment variables to check for API key (in priority order)
+    /// 按优先级查找的 API key 环境变量列表
     pub api_key_env_vars: &'static [&'static str],
-    /// Transport protocol
+    /// 传输协议
     pub transport: TransportType,
-    /// Aliases (alternative names that resolve to this provider)
+    /// 别名（其他可解析到本 provider 的名字）
     pub aliases: &'static [&'static str],
 }
 
-/// Provider registry - all supported providers
+/// Provider 注册表——所有支持的 provider
 pub static PROVIDER_REGISTRY: &[ProviderConfig] = &[
     ProviderConfig {
         id: "openai",
@@ -78,7 +78,7 @@ pub static PROVIDER_REGISTRY: &[ProviderConfig] = &[
 
 ];
 
-/// Look up a provider config by id or alias
+/// 按 id 或 alias 查找 provider 配置
 pub fn get_provider_config(id: &str) -> Option<&'static ProviderConfig> {
     let id_lower = id.to_lowercase();
     PROVIDER_REGISTRY

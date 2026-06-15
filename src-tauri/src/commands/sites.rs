@@ -59,9 +59,9 @@ pub async fn get_project(id: String, db: State<'_, SharedDatabase>) -> Result<Op
         .map_err(|e| e.to_string())
 }
 
-/// Create a new project. Kind is decided at creation time:
-///   - "note" → just a directory with a `notes/` subdir
-///   - "site" → a directory ready to receive an Astro project
+/// 创建新项目。Kind 在创建时决定：
+///   - "note" → 一个带 `notes/` 子目录的目录
+///   - "site" → 一个准备好接 Astro 项目的目录
 #[tauri::command]
 pub async fn create_project(
     name: String,
@@ -116,7 +116,7 @@ fn resolve_nova_home() -> String {
         .to_string_lossy().to_string()
 }
 
-/// Promote a note project to a site project by attaching a template.
+/// 通过挂载模板把 note 项目升级为 site 项目。
 #[tauri::command]
 pub async fn upgrade_to_site(
     id: String,

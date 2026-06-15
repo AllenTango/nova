@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
-// ── Provider data types (shared between config file and frontend) ─
+// ── Provider 数据类型（配置文件和前端共享）──
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -67,7 +67,7 @@ pub struct UpdateProvider {
 
 pub const PRESET_FAMILIES: &[&str] = &["openai", "anthropic", "google"];
 
-// ── Unified config file ──────────────────────────────────────────
+// ── 统一配置文件 ──────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NovaConfig {
@@ -130,7 +130,7 @@ pub fn write_config(app: &tauri::AppHandle, config: &NovaConfig) -> Result<(), S
     fs::write(&path, json).map_err(|e| format!("write {path:?}: {e}"))
 }
 
-/// Read config from a `nova_home` directory (used at boot time).
+/// 从 `nova_home` 目录读配置（启动期用）。
 pub fn read_config_from(nova_home: &PathBuf) -> NovaConfig {
     let path = nova_home.join("config.json");
     match fs::read_to_string(&path) {
@@ -139,7 +139,7 @@ pub fn read_config_from(nova_home: &PathBuf) -> NovaConfig {
     }
 }
 
-/// Read config and return only the settings fields.
+/// 读配置，只返回 settings 字段。
 pub fn read_settings(app: &tauri::AppHandle) -> SettingsConfig {
     let c = read_config(app);
     SettingsConfig {
@@ -149,7 +149,7 @@ pub fn read_settings(app: &tauri::AppHandle) -> SettingsConfig {
     }
 }
 
-/// Update settings fields in-place and persist.
+/// 就地更新 settings 字段并落盘。
 pub fn write_settings(app: &tauri::AppHandle, s: &SettingsConfig) -> Result<(), String> {
     let mut config = read_config(app);
     config.nova_port = s.nova_port;
@@ -158,38 +158,38 @@ pub fn write_settings(app: &tauri::AppHandle, s: &SettingsConfig) -> Result<(), 
     write_config(app, &config)
 }
 
-/// Read config and return only the provider secrets map.
+/// 读配置，只返回 provider 密钥表。
 pub fn read_secrets(app: &tauri::AppHandle) -> BTreeMap<String, String> {
     read_config(app).provider_secrets
 }
 
-/// Update a single secret and persist.
+/// 更新单个密钥并落盘。
 pub fn write_secret(app: &tauri::AppHandle, id: &str, key: &str) -> Result<(), String> {
     let mut config = read_config(app);
     config.provider_secrets.insert(id.to_string(), key.to_string());
     write_config(app, &config)
 }
 
-/// Remove a secret and persist.
+/// 删除一个密钥并落盘。
 pub fn clear_secret(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     let mut config = read_config(app);
     config.provider_secrets.remove(id);
     write_config(app, &config)
 }
 
-/// Read config and return only the providers list.
+/// 读配置，只返回 providers 列表。
 pub fn read_providers(app: &tauri::AppHandle) -> Vec<ProviderEntry> {
     read_config(app).providers
 }
 
-/// Replace the providers list in-place and persist.
+/// 就地替换 providers 列表并落盘。
 pub fn write_providers(app: &tauri::AppHandle, providers: &[ProviderEntry]) -> Result<(), String> {
     let mut config = read_config(app);
     config.providers = providers.to_vec();
     write_config(app, &config)
 }
 
-// ── Settings struct (for commands/settings.rs) ───────────────────
+// ── Settings 结构（给 commands/settings.rs 用）─────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SettingsConfig {

@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-/// Locate the repo-level templates directory during development.
+/// 定位仓库级 templates 目录（开发态用）。
 ///
-/// Production packaging will later move this to Tauri resources. For now,
-/// dev-mode is the priority: `src-tauri/` is the current crate dir, so the
-/// project root is one level above it.
+/// 生产打包时这里会改成 Tauri resources 路径。眼下优先
+/// dev-mode：`src-tauri/` 是当前 crate 目录，仓库根就是它
+/// 上一级。
 fn templates_root() -> Result<PathBuf, String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = manifest_dir
@@ -19,10 +19,10 @@ fn templates_root() -> Result<PathBuf, String> {
 }
 
 pub fn apply_template(template: &str, target: &Path) -> Result<(), String> {
-    // v1 only ships a real `blog` template. The rest of the template ids are
-    // valid product choices in the UI, but they safely fall back to `blog`
-    // until their dedicated files are implemented. This keeps the UX honest:
-    // the action succeeds and the user gets a working site instead of an error.
+    // v1 实际只发版一个真实的 `blog` 模板。其他模板 id 是 UI 里
+    // 的合法选项，但会安全地回退到 `blog`
+    // 直到对应文件实现为止。这保 UX 诚实：
+    // 操作成功，用户拿到一个可用的站点，而不是错误。
     let resolved = resolve_template(template);
     let source = templates_root()?.join(resolved);
     if !source.exists() {
@@ -58,8 +58,8 @@ fn copy_dir_all(source: &Path, target: &Path) -> Result<(), String> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
 
-        // Never copy generated or machine-local artifacts into a new site.
-        // These caused "产物出现在项目内" and made fresh projects noisy.
+        // 永远不把生成产物或机器本地工件复制进新站点。
+        // 这些会让新项目夹带噪声。
         if name == "dist"
             || name == "node_modules"
             || name == ".astro"
@@ -71,7 +71,7 @@ fn copy_dir_all(source: &Path, target: &Path) -> Result<(), String> {
         if file_type.is_dir() {
             copy_dir_all(&from, &to)?;
         } else {
-            // Do not overwrite user-created notes when upgrading.
+            // 升级时不覆盖用户已创建的笔记。
             if to.exists() && to.extension().map(|e| e == "md").unwrap_or(false) {
                 continue;
             }

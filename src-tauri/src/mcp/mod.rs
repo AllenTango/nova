@@ -1,6 +1,6 @@
-// MCP Server module
-// This will implement the Model Context Protocol server for Nova
-// allowing external AI tools to interact with Nova
+// MCP server 模块
+// 未来实现 Nova 嘅 Model Context Protocol server
+// 让外部 AI 工具能同 Nova 交互
 
 pub mod handler {
     use serde::{Deserialize, Serialize};

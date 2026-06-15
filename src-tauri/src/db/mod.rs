@@ -3,16 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// A project is the top-level container. It can be:
-/// - "note":  just a folder of Markdown files, no Astro engine
-/// - "site":  an Astro project that can be previewed and deployed
+/// 项目是顶层容器。可以是：
+/// - "note"：纯 Markdown 文件夹，无 Astro 引擎
+/// - "site"：Astro 项目，可预览可部署
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
     pub id: String,
     pub name: String,
     /// "note" | "site"
     pub kind: String,
-    /// Only meaningful when kind == "site"
+    /// 仅当 kind == "site" 时才有意义
     pub template: String,
     pub path: String,
     pub created_at: i64,
@@ -36,9 +36,9 @@ impl Database {
     fn init(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
-        // Migrate: create the new projects table if missing.
-        // We deliberately do not try to preserve the old `sites` table —
-        // this is greenfield code, no production data to migrate.
+        // 迁移：建新 projects 表（如果还没建）。
+        // 我们刻意不保留旧 `sites` 表——这是 greenfield 代码，
+        // 没什么生产数据要迁移。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -112,7 +112,7 @@ impl Database {
         Ok(())
     }
 
-    /// Convert a note project into a site project by attaching a template.
+    /// 通过挂上模板，把 note 项目升级为 site 项目。
     pub fn upgrade_to_site(&self, id: &str, template: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
@@ -123,8 +123,8 @@ impl Database {
         Ok(())
     }
 
-    /// A downgrade path is intentionally not provided — once a site,
-    /// it's a site. (Could be added later if needed.)
+    /// 故意不提供降级路径——一旦是 site，就是 site。
+    /// （有需要的话日后可以加。）
 
     pub fn touch(&self, id: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
@@ -162,11 +162,11 @@ impl Database {
         Ok(())
     }
 
-    /// Repair early broken paths that accidentally wrote runtime data inside
-    /// the repo, e.g. `<repo>/src-tauri/~/.nova/projects/<id>`.
+    /// 修复早期意外把运行时数据写到 repo 里的破路径，
+    /// 例如 `<repo>/src-tauri/~/.nova/projects/<id>`。
     ///
-    /// We migrate both the on-disk directory and the DB path to the proper
-    /// Nova data dir. Safe to run on every boot.
+    /// 我们把磁盘目录和 DB 路径都迁到正确的 Nova 数据目录。
+    /// 每次启动都跑都安全。
     pub fn repair_project_paths(&self, repo_root: &PathBuf, nova_home: &PathBuf) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, path FROM projects")?;

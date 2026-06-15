@@ -1,10 +1,9 @@
 /**
- * Word counter tuned for mixed CJK / Latin text.
+ * 调校过的中英文混排字数计数器。
  *
- * CJK characters are counted individually; Latin alphanumeric runs
- * are counted as one word each. This is the single source of truth
- * for Nova's "star mass" (word count) metrics across Dashboard,
- * Observatory and the editor.
+ * CJK 字符逐个计；Latin 字母数字段每个段计作 1 个词。
+ * Nova 全平台（Dashboard、Observatory、编辑器）"star mass"
+ * （字数）指标的唯一来源。
  */
 export function countWords(s: string): number {
   if (!s) return 0;
@@ -26,18 +25,14 @@ export function countWords(s: string): number {
   return n;
 }
 
-/**
- * Format a large word count into a compact star-mass reading.
- */
+/** 把大字数格式化成紧凑的 star-mass 读数。 */
 export function formatWordMass(n: number): string {
   if (n >= 10000) return `${(n / 10000).toFixed(1)}w`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return n.toLocaleString();
 }
 
-/**
- * Stage label derived from word mass, matching game-design §3.2.
- */
+/** 由 word mass 派生的阶段标签，匹配 game-design §3.2。 */
 export function massStageLabel(n: number): StarStage {
   if (n >= 1000) return "新星";
   if (n >= 1) return "星胚";
@@ -47,14 +42,12 @@ export function massStageLabel(n: number): StarStage {
 export type StarStage = "星尘" | "星胚" | "新星" | "恒星" | "星港";
 
 /**
- * Combined payload: a project's word mass and the stage it maps to.
- * Layout code imports this instead of recomputing the label twice.
+ * 组合 payload：项目嘅 word mass 和对应嘅阶段。
+ * 布局代码 import 本类型，免去重复算 label。
  */
 export type WordMass = { count: number; stage: StarStage };
 
-/**
- * Build a WordMass payload from a raw count.
- */
+/** 从原始字数构造 WordMass payload。 */
 export function wordMass(n: number): WordMass {
   return { count: n, stage: massStageLabel(n) };
 }

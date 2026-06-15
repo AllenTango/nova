@@ -1,6 +1,13 @@
 # Nova — 星系式建站桌面应用
 
-> **Status**: v1.0 | **Date**: 2026-06-13 | **Role**: Dev Lead
+> **Status**: v1.x（命题 A 已落地：chat 改 Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式）| **Date**: 2026-06-15 | **Role**: Dev Lead
+>
+> 关联文档：
+> - [`docs/game-design.md`](docs/game-design.md) — 游戏化视觉与交互规范
+> - [`docs/design-tokens.md`](docs/design-tokens.md) — 设计 token 文档
+> - [`docs/conventions/001-comments-zh-CN.md`](docs/conventions/001-comments-zh-CN.md) — 代码注释简体中文约定
+> - [`docs/architecture-decisions/0001-provider-system.md`](docs/architecture-decisions/0001-provider-system.md) — Provider 系统设计
+> - [`docs/architecture-decisions/0002-chat-ipc-streaming.md`](docs/architecture-decisions/0002-chat-ipc-streaming.md) — Chat IPC 流式架构（取代 v1.0 HTTP fetch）
 
 ---
 
@@ -32,8 +39,8 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 │                      Nova (Tauri)                           │
 │  ┌────────────────┐    ┌─────────────────────────┐        │
 │  │  React SPA     │◄──►│  Rust Backend           │        │
-│  │  (前端管理界面) │    │  (端口可配置，鉴权可选)   │        │
-│  │  Port 3848     │    │  HTTP API + MCP Server  │        │
+│  │  (前端管理界面) │    │  (Tauri commands + IPC) │        │
+│  │  Tauri webview │    │  Channel<ChatEvent> 流式 │        │
 │  └────────────────┘    └──────────┬──────────────┘        │
 │                                   │                        │
 │  ┌────────────────┐              │                        │
@@ -44,12 +51,14 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
          │                         │
          ▼                         ▼
 ┌─────────────────┐      ┌────────────────────────┐
-│  文件系统       │      │  Astro Docs MCP       │
-│  ~/.nova/       │      │  mcp.docs.astro.build │
-│  - config.json  │      └────────────────────────┘
-│  - nova.db      │
-└─────────────────┘
+│  文件系统       │      │  外部 AI 客户端入口     │
+│  ~/.nova/       │      │  (OpenAI 兼容 HTTP)     │
+│  - config.json  │      │  /v1/chat/completions  │
+│  - nova.db      │      │  /mcp (未来 MCP)        │
+└─────────────────┘      └────────────────────────┘
 ```
+
+**v1.x 变更**：chat 通讯从 v1.0 嘅 HTTP fetch + SSE wire 解析改为 Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式（命题 A）。HTTP server 收紧到只剩 `/health` + `/v1/chat/completions`（外部 OpenAI 兼容客户端用），见 ADR 0002。
 
 ### 2.2 技术栈
 
@@ -61,7 +70,8 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 | 站点编辑/预览 | **Astro** | 复用引擎，所见即所得 |
 | 本地预览 | Astro dev server + Vite HMR | iframe 嵌入，右侧可隐藏 |
 | 应用数据 | SQLite（元数据）+ 文件系统 | SQLite 存元数据，文件存内容 |
-| Agent 通信 | HTTP API + MCP Server | 内部 HTTP，外部 MCP |
+| **内部 chat 通讯** | **Tauri 2 IPC + `Channel<ChatEvent>` 流式** | **v1.x（命题 A）** |
+| **外部 Agent 通讯** | **OpenAI 兼容 HTTP + MCP Streamable HTTP** | v1.x 起 |
 | 技能格式 | YAML | 描述 API 端点、参数、示例 |
 
 ### 2.3 本地预览机制
@@ -127,27 +137,11 @@ Nova 的游戏感来自“行动 → 反馈 → 成长 → 奖励”的闭环，
 
 ### 4.2 模板体系
 
-**内置 10+ 模板**：
+**v1.0 现状**：内置 **1 套 blog 模板**（`templates/site/`）。代码里保留 6 个 template id 兜底：`blog` / `gallery` / `vlog` / `blog-gallery` / `corporate` / `agent-home`，**全部 fall back 到 blog**——这是行业常态但 UX 应清楚。
 
-| 模板 | 内容类型 | 说明 |
-|---|---|---|
-| 博客1 | blog + about | 经典博客布局 |
-| 博客2| vlog + about | 视频为主 |
-| 博客3 | gallery + about | 图片展示为主 |
-| 博客4 | blog + vlog + about | 混合 |
-| 博客5 | blog + gallery + about | 混合 |
-| 博客6 | vblog + gallery + about | 混合 |
-| 博客7 | blog + vblog + gallery + about | 混合 |
-| 企业官网 | page + about | 企业介绍 |
-| 智能体主页 | page + about | 智能体动态展示 |
-| 活动落地页 | page + form | 表单收集 |
-| 知识库 | page + about | 文档为主 |
-| 作品集 | page + about | 个人作品展示 |
+**v2.x 计划**：拆 `template` trait + 双路径（builtin / user_root），引入 `template.yaml` manifest schema + 远端 registry.json（静态托管 S3/R2/GitHub Releases）。详见 [ADR 0001 §2.2 备注](docs/architecture-decisions/0001-provider-system.md) 嘅「模板」章节（v2.x 计划）。
 
-**模板设计**：
-- 迁移自 memoria 主题系统（template.html → Astro layout）
-- 4 套配色主题：dracula（暗）、mint、nord、peach（亮）
-- 应用默认暗色 Dracula，应用默认亮色 Peach
+**配色主题**：4 套——dracula（暗）、mint、nord、peach（亮）。应用默认暗色 Dracula + 亮色 Peach。
 
 ### 4.3 内容模型
 
@@ -252,27 +246,33 @@ tags: [tag1, tag2]
 
 ## 5. Agent 集成
 
-### 5.1 通信方式
+### 5.1 通讯分层
 
-| 方式 | 用途 |
-|---|---|
-| **本地 HTTP API** | 内部 Agent 调用（如 Hermes Agent） |
-| **MCP Server** | 外部 AI 工具（Claude Desktop、Cursor、Opencode AI 等） |
+Nova webview ↔ Rust backend 全走 **Tauri IPC**（`#[tauri::command]` + `tauri::ipc::Channel<T>` 流式）。Nova ↔ **外部** AI 客户端（Hermes、Claude Desktop、Cursor、OpenCode 等）走 **HTTP**（OpenAI 兼容 + 未来 MCP Streamable HTTP）。
 
-### 5.2 Nova MCP Server
+| 方向 | 协议 | 用途 |
+|---|---|---|
+| **内部**：Nova webview ↔ Rust | Tauri 2 IPC + `Channel<ChatEvent>` | AIChatPanel 流式对话（v1.x 命题 A） |
+| **外部**：Rust ↔ 外部 AI 客户端 | HTTP `/v1/chat/completions` | OpenAI 兼容入口，Hermes 等可直连 |
+| **外部**：Rust ↔ 外部 AI 客户端 | HTTP `/mcp` | MCP Streamable HTTP（v2.x 命题 B） |
+| **内部**：Rust ↔ 外部 provider | HTTPS | OpenAI / Anthropic / Google / Ollama |
 
-Nova 自身作为 MCP Server 暴露能力：
+详细架构决策见 [ADR 0002](docs/architecture-decisions/0002-chat-ipc-streaming.md)。
+
+### 5.2 Nova HTTP Server（外部 OpenAI 兼容 + MCP 入口）
 
 ```json
 {
   "mcpServers": {
     "nova": {
       "type": "http",
-      "url": "http://localhost:{port}/mcp"
+      "url": "http://localhost:18999/v1/chat/completions"
     }
   }
 }
 ```
+
+v2.x 加入 MCP Streamable HTTP 端点 `/mcp`（命题 B）。
 
 ### 5.3 Astro Docs MCP
 
@@ -532,33 +532,68 @@ nova/
 │   ├── main.rs
 │   ├── nova_config.rs     # 统一配置读写（~/.nova/config.json：ports / theme / providers / provider_secrets）
 │   ├── commands/
-│   │   ├── sites.rs        # 项目管理命令
-│   │   ├── notes.rs        # 纯笔记 CRUD
-│   │   ├── content.rs
-│   │   ├── chat.rs         # AI 对话 + 模型列表
+│   │   ├── sites.rs        # 项目管理命令（note + site 合并）
+│   │   ├── chat.rs         # AI 对话 + 模型列表（v1.x：Channel<ChatEvent> 流式）
 │   │   ├── providers.rs    # 供应商 CRUD 命令
 │   │   ├── settings.rs     # 端口设置命令
 │   │   └── deploy.rs
 │   ├── provider/           # AI 供应商传输层
 │   │   ├── config.rs       # 供应商注册表（openai/anthropic/google/ollama）
 │   │   ├── openai.rs / anthropic.rs / google.rs / ollama.rs
-│   │   └── mod.rs          # ProviderFactory（凭证仅接受显式参数，不再读 env）
+│   │   └── mod.rs          # ProviderFactory + LLMClient trait + chat_stream 4 provider override
 │   ├── providers/
 │   │   └── mod.rs          # 供应商列表组装（preset + user，preset 仅当 config.json 有 secret 才显示）
 │   ├── db/
 │   │   └── mod.rs          # SQLite 数据库
 │   ├── http_server/
-│   │   └── mod.rs          # HTTP API 服务器（流式对话等）
+│   │   └── mod.rs          # HTTP API 服务器（/health + /v1/chat/completions，未来 + /mcp）
 │   └── mcp/
-│       └── server.rs       # MCP 协议端点
+│       └── mod.rs          # MCP 协议 stub（计划中）
 ├── skills/                # 内置技能 YAML
 │   ├── nova-site.yaml
 │   ├── nova-content.yaml
 │   └── ...
-├── templates/             # 内置 Astro 模板
-│   ├── blog/
-│   ├── gallery/
-│   └── ...
+├── templates/             # 内置 Astro 模板（v1.0 实际 1 套 blog，6 个 template id 全部兜底）
+│   └── site/              # 当前实际模板目录
+│       └── blog/          # 兜底 blog
 ├── nova.db                 # SQLite 数据库
 └── config.json            # 统一配置文件
 ```
+
+---
+
+## 11. v1.x Changelog
+
+### 2026-06-15：命题 A 落地（chat IPC 流式）
+
+- **架构**：Nova webview ↔ Rust chat 通讯从 HTTP fetch + SSE wire 解析改为 **Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式**。详见 [ADR 0002](docs/architecture-decisions/0002-chat-ipc-streaming.md)。
+- **Provider 抽象**：`LLMClient` trait 加 `chat_stream` 默认实现 + 4 个 provider 各自 override 真 SSE 转发（OpenAI 标准 SSE / Anthropic event-based SSE / Google Gemini 标准 SSE / Ollama NDJSON）。
+- **http_server 收紧**：内部 `/v1/chat/completions` 路由**保留**作外部 OpenAI 兼容客户端入口（`/health` 同样保留）。`nova_port` 配置保留作 MCP 未来用。
+- **删除**：`test_ai_provider` Tauri command（冗余，list_models 已隐式验证）。
+- **硬编码清理**：`ANTHROPIC_MODELS` 11 条硬编码删除，改为 `GET /v1/models` 实时拉取。**所有 4 provider 嘅 list_models 都走 API**。
+- **代码注释统一简体中文**：全项目 19 个 Rust 文件 + 14 个 TS/TSX 文件嘅 doc comment 翻译为简体中文，技术专名保留英文。详见 [约定 001](docs/conventions/001-comments-zh-CN.md)。
+- **NovaOutOfBoundsGate dev 旁路**：加 `?preview-gate` URL 参数强制渲染拦截页，方便 vite preview 调试。
+
+### 2026-06-13：v1.0 初版
+
+- Nova webview 初版：星图 Dashboard + 项目编辑 + AI 对话（HTTP fetch）+ Settings
+- Provider 注册表（4 provider + preset/user 双层）
+- 6 个 template id 全部 fall back 到 blog 兜底
+- NovaOutOfBoundsGate 生产期顶层拦截
+
+---
+
+## 12. 文档结构
+
+```
+docs/
+├── game-design.md          # 游戏化视觉与交互规范
+├── design-tokens.md        # 设计 token 文档
+├── conventions/
+│   └── 001-comments-zh-CN.md    # 代码注释简体中文约定
+└── architecture-decisions/
+    ├── 0001-provider-system.md  # Provider 系统设计
+    └── 0002-chat-ipc-streaming.md  # Chat IPC 流式架构
+```
+
+AI 协作者必读 [`AGENTS.md`](AGENTS.md)。

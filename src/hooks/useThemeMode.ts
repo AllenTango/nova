@@ -1,10 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api, Settings } from "../api/client";
 
-/**
- * Manages the theme mode (dark/light) and persists it to the backend.
- * Falls back to localStorage when the backend is unavailable (dev).
- */
+/** 管理主题模式（dark/light）并持久化到后端。后端不可用时回退 localStorage（dev）。 */
 export function useThemeMode() {
   const [mode, setMode] = useState<"dark" | "light">(() => {
     const cached = localStorage.getItem("nova.theme");

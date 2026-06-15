@@ -1,20 +1,18 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 /**
- * Detect whether the app is running inside a Tauri webview.
+ * 检测 app 是否运行在 Tauri webview 里。
  *
- * In vite-dev / pure-browser mode, `window.__TAURI_INTERNALS__` is not
- * injected, so any `invoke` call throws `Cannot read properties of
- * undefined (reading 'invoke')`. We wrap the raw call so:
- *   - tauri mode: real invoke, errors propagate normally
- *   - web mode:  invoke throws a `NotInTauriError` so React Query
- *                callers can decide what to render (e.g. a fallback
- *                panel or a "open in desktop app" hint) instead of
- *                crashing the component tree.
+ * 在 vite-dev / 纯浏览器模式下，`window.__TAURI_INTERNALS__` 没注入，
+ * 任何 `invoke` 调用都会抛 `Cannot read properties of undefined
+ * (reading 'invoke')`。我们包一层原始调用：
+ *   - tauri 模式：真 invoke，错误照常透传
+ *   - web 模式：invoke 抛 `NotInTauriError`，让 React Query 调用方
+ *                决定渲染什么（例如 fallback 面板或"在桌面应用里打开"
+ *                提示），而不是直接崩掉组件树。
  *
- * Export `isTauri()` so components can also use it to gate queries
- * (skip work entirely in the browser) instead of running them and
- * catching.
+ * 同时导出 `isTauri()`，方便组件用它来 gate query（完全跳过浏览器
+ * 里的查询）而不是先跑再 catch。
  */
 export function isTauri(): boolean {
   return (
@@ -266,8 +264,6 @@ export const api = {
         systemPrompt,
         overrides,
       }),
-    testProvider: (overrides?: ChatOverrides) =>
-      invoke<string>("test_ai_provider", { overrides }),
     listModels: (overrides?: ChatOverrides) =>
       invoke<string[]>("list_models", { overrides }),
   },
