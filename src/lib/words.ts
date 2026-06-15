@@ -38,8 +38,23 @@ export function formatWordMass(n: number): string {
 /**
  * Stage label derived from word mass, matching game-design §3.2.
  */
-export function massStageLabel(n: number): string {
+export function massStageLabel(n: number): StarStage {
   if (n >= 1000) return "新星";
   if (n >= 1) return "星胚";
   return "星尘";
+}
+
+export type StarStage = "星尘" | "星胚" | "新星" | "恒星" | "星港";
+
+/**
+ * Combined payload: a project's word mass and the stage it maps to.
+ * Layout code imports this instead of recomputing the label twice.
+ */
+export type WordMass = { count: number; stage: StarStage };
+
+/**
+ * Build a WordMass payload from a raw count.
+ */
+export function wordMass(n: number): WordMass {
+  return { count: n, stage: massStageLabel(n) };
 }
