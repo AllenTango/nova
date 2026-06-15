@@ -16,7 +16,7 @@ import {
   Close as CloseIcon,
   SwapHoriz as SwitchIcon,
 } from "@mui/icons-material";
-import { api, ProviderEntry, Settings, isTauri } from "../api/client";
+import { api, ProviderEntry, Settings } from "../api/client";
 import { T, FONT } from "../theme";
 import OrbitRing from "./OrbitRing";
 import { useLocalAI } from "../hooks/useLocalAI";
@@ -58,7 +58,6 @@ export default function AIChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isTauri()) return;
     // Fetch in parallel — Settings (for nova_port + sessionToken) and
     // the provider list. We only block the chat switcher on the
     // providers list; everything else stays optimistic.

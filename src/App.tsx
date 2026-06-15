@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import ProjectEditor from "./pages/ProjectEditor";
 import Settings from "./pages/Settings";
 import NovaIntro from "./components/NovaIntro";
+import NovaOutOfBoundsGate from "./components/NovaOutOfBoundsGate";
 import { darkTheme, lightTheme } from "./theme";
 import { useThemeMode } from "./hooks/useThemeMode";
 
@@ -26,34 +27,36 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
-          {currentPage === "dashboard" && (
-            <Dashboard
-              onSelectProject={(id) => {
-                setSelectedProject(id);
-                setCurrentPage("editor");
-              }}
-              onOpenSettings={() => setCurrentPage("settings")}
-              themeMode={mode}
-              onToggleTheme={toggle}
-            />
-          )}
-          {currentPage === "editor" && (
-            <ProjectEditor
-              projectId={selectedProject}
-              onBack={() => setCurrentPage("dashboard")}
-              onOpenSettings={() => setCurrentPage("settings")}
-              themeMode={mode}
-            />
-          )}
-          {currentPage === "settings" && (
-            <Settings
-              onBack={() => setCurrentPage("dashboard")}
-              themeMode={mode}
-            />
-          )}
-        </Box>
-        {!introDone && <NovaIntro onDone={onIntroDone} />}
+        <NovaOutOfBoundsGate themeMode={mode}>
+          <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
+            {currentPage === "dashboard" && (
+              <Dashboard
+                onSelectProject={(id) => {
+                  setSelectedProject(id);
+                  setCurrentPage("editor");
+                }}
+                onOpenSettings={() => setCurrentPage("settings")}
+                themeMode={mode}
+                onToggleTheme={toggle}
+              />
+            )}
+            {currentPage === "editor" && (
+              <ProjectEditor
+                projectId={selectedProject}
+                onBack={() => setCurrentPage("dashboard")}
+                onOpenSettings={() => setCurrentPage("settings")}
+                themeMode={mode}
+              />
+            )}
+            {currentPage === "settings" && (
+              <Settings
+                onBack={() => setCurrentPage("dashboard")}
+                themeMode={mode}
+              />
+            )}
+          </Box>
+          {!introDone && <NovaIntro onDone={onIntroDone} />}
+        </NovaOutOfBoundsGate>
       </ThemeProvider>
     </QueryClientProvider>
   );

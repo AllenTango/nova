@@ -18,7 +18,7 @@ import {
   LightMode as SunIcon,
   DarkMode as MoonIcon,
 } from "@mui/icons-material";
-import { api, ProjectKind, isTauri } from "../api/client";
+import { api, ProjectKind } from "../api/client";
 import { T, FONT } from "../theme";
 import Starfield from "../components/Starfield";
 import Observatory from "../components/Observatory";
@@ -52,17 +52,11 @@ export default function Dashboard({
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<ProjectKind>("note");
   const [newTemplate, setNewTemplate] = useState("blog");
-  // Cached at mount so toggling this in dev doesn't flicker.
-  const inTauriEnv = isTauri();
 
   const t = T[themeMode];
 
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ["projects"],
-    // Skip the IPC round-trip in pure-browser mode so we don't burn
-    // retries against a missing __TAURI_INTERNALS__. The web preview
-    // still renders EmptyHero with projects=[].
-    enabled: isTauri(),
     queryFn: () => api.projects.list(),
   });
 
@@ -189,14 +183,13 @@ export default function Dashboard({
 
         {/* Hero */}
         {projects.length === 0 ? (
-          <EmptyHero onCreate={() => setDialogOpen(true)} t={t} inTauri={inTauriEnv} />
+          <EmptyHero onCreate={() => setDialogOpen(true)} t={t} />
         ) : (
           <ActiveHero
             noteCount={notes.length}
             siteCount={sites.length}
             onCreate={() => setDialogOpen(true)}
             t={t}
-            inTauri={inTauriEnv}
           />
         )}
 
@@ -426,11 +419,9 @@ export default function Dashboard({
 function EmptyHero({
   onCreate,
   t,
-  inTauri,
 }: {
   onCreate: () => void;
   t: typeof T.dark;
-  inTauri: boolean;
 }) {
   return (
     <Box sx={{ pt: 6, pb: 4 }}>
@@ -468,16 +459,10 @@ function EmptyHero({
         variant="contained"
         size="large"
         onClick={onCreate}
-        disabled={!inTauri}
         sx={{ mt: 4, fontSize: "0.95rem", px: 4, py: 1.25 }}
       >
         开始建造
       </Button>
-      {!inTauri && (
-        <Typography variant="caption" sx={{ display: "block", mt: 2, color: t.starFaint, maxWidth: 480 }}>
-          你正在浏览器预览模式下查看 Nova。在 Tauri 桌面应用中运行才能创建、编辑与构建项目。
-        </Typography>
-      )}
     </Box>
   );
 }
@@ -487,13 +472,11 @@ function ActiveHero({
   siteCount,
   onCreate,
   t,
-  inTauri,
 }: {
   noteCount: number;
   siteCount: number;
   onCreate: () => void;
   t: typeof T.dark;
-  inTauri: boolean;
 }) {
   const total = noteCount + siteCount;
   return (
@@ -528,7 +511,7 @@ function ActiveHero({
           {total} {total === 1 ? "颗星" : "颗星"} · {siteCount} 站 / {noteCount} 笔记
         </Typography>
       </Box>
-      <Button variant="outlined" onClick={onCreate} disabled={!inTauri}>
+      <Button variant="outlined" onClick={onCreate}>
         + 新的星
       </Button>
     </Box>

@@ -30,7 +30,6 @@ import {
   NewProvider,
   UpdateProvider,
   FamilyKind,
-  isTauri,
 } from "../api/client";
 import { T, FONT } from "../theme";
 import Starfield from "../components/Starfield";
@@ -197,7 +196,6 @@ export default function SettingsPage({
 
   // ── Hydration ────────────────────────────────────────────────
   useEffect(() => {
-    if (!isTauri()) return;
     api.settings
       .get()
       .then((s) => setSettings(s))
