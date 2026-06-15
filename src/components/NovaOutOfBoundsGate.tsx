@@ -31,7 +31,36 @@ import { isTauri } from "../api/client";
  * development are a legitimate use case — vite HMR needs them. The
  * DEV/PROD split keeps the dev experience smooth while still
  * hardening production.
+ *
+ * ## Dev preview bypass
+ *
+ * The gate can be force-rendered in development for visual review by
+ * appending `?preview-gate` to the URL:
+ *
+ *   http://localhost:1420/?preview-gate           → show gate
+ *   http://localhost:1420/?preview-gate=false     → never show gate
+ *   http://localhost:1420/                        → normal dev (no gate)
+ *
+ * This lets you screenshot the out-of-bounds screen without
+ * rebuilding for production. The bypass is dev-only — in a prod
+ * build the real `PROD && !isTauri()` check is what blocks.
+ *
+ * Implementation note: we use `window.location.search` rather than
+ * `URLSearchParams` for size (the URL is parsed once on mount).
  */
+function shouldBlock(): boolean {
+  if (typeof window === "undefined") return false;
+
+  // Dev preview bypass. Explicit `?preview-gate=false` always wins.
+  if (window.location.search.includes("preview-gate")) {
+    if (window.location.search.includes("preview-gate=false")) return false;
+    return true;
+  }
+
+  // Real check: production build accessed from outside Tauri.
+  return import.meta.env.PROD && !isTauri();
+}
+
 export default function NovaOutOfBoundsGate({
   children,
   themeMode,
@@ -42,7 +71,7 @@ export default function NovaOutOfBoundsGate({
   const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
-    if (import.meta.env.PROD && !isTauri()) {
+    if (shouldBlock()) {
       setBlocked(true);
     }
   }, []);
