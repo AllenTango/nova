@@ -3,6 +3,7 @@ import { Box, Tooltip, Typography } from "@mui/material";
 import { T, FONT } from "../theme";
 import OrbitRing from "./OrbitRing";
 import { api, ProjectInfo, Note, Post } from "../api/client";
+import { countWords } from "../lib/words";
 
 /**
  * "天文台" — a small permanent strip at the bottom of the Dashboard
@@ -200,30 +201,6 @@ function Divider({ t }: { t: typeof T.dark }) {
       }}
     />
   );
-}
-
-function countWords(s: string): number {
-  if (!s) return 0;
-  // For mixed CJK / Latin text, count CJK characters individually
-  // and latin runs by word.
-  let n = 0;
-  let inLatin = false;
-  for (const ch of s) {
-    if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(ch)) {
-      if (inLatin) {
-        inLatin = false;
-      }
-      n += 1;
-    } else if (/[A-Za-z0-9]/.test(ch)) {
-      if (!inLatin) {
-        inLatin = true;
-        n += 1;
-      }
-    } else {
-      inLatin = false;
-    }
-  }
-  return n;
 }
 
 function computeStreaks(timestamps: number[]): {

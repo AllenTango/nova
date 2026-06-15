@@ -9,7 +9,7 @@
 
 export type NovaEvent =
   | { type: "create"; x: number; y: number }
-  | { type: "save"; projectId: string }
+  | { type: "save"; projectId: string; x?: number; y?: number }
   | { type: "delete"; x: number; y: number }
   | { type: "upgrade"; x: number; y: number }
   | { type: "milestone"; threshold: number };

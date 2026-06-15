@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -55,6 +55,7 @@ export default function AIChatPanel({
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [sessionToken, setSessionToken] = useState<string>("");
   const [, setSystemPrompt] = useState<string>("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -135,6 +136,11 @@ export default function AIChatPanel({
         }
       : undefined,
   });
+
+  // Auto-scroll the ship's log to the latest entry as it streams in.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [localAI.messages, localAI.isLoading]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -325,8 +331,8 @@ export default function AIChatPanel({
                 </Box>
               </Box>
 
-              {/* Streaming message display */}
-              {localAI?.messages && localAI.messages.length > 0 && (
+              {/* Ship's log — every exchange is a transmission. */}
+              {localAI?.messages && localAI.messages.length > 0 ? (
                 <Box
                   sx={{
                     border: `1px solid ${t.border}`,
@@ -334,31 +340,81 @@ export default function AIChatPanel({
                     p: 1.5,
                     color: t.star,
                     background: t.surface,
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.7,
-                    fontSize: "0.9rem",
+                    maxHeight: 360,
+                    overflowY: "auto",
+                    display: "grid",
+                    gap: 1.5,
                   }}
                 >
                   {localAI.messages.map((msg, i) => (
-                    <Box key={i}>
-                      {msg.role === "user" && (
-                        <Typography variant="caption" sx={{ color: t.nova, display: "block", mb: 0.5 }}>
-                          你：
+                    <Box
+                      key={i}
+                      sx={{
+                        display: "flex",
+                        gap: 1,
+                        flexDirection: msg.role === "user" ? "row-reverse" : "row",
+                        alignItems: "flex-start",
+                      }}
+                    >
+                      <Box sx={{ pt: 0.5 }}>
+                        <OrbitRing
+                          status={msg.role === "user" ? "active" : "locked"}
+                          size={8}
+                        />
+                      </Box>
+                      <Box
+                        sx={{
+                          flex: 1,
+                          p: 1.25,
+                          borderRadius: 1,
+                          background:
+                            msg.role === "user" ? t.novaGlow : t.dust,
+                          border: `1px solid ${
+                            msg.role === "user" ? t.nova : t.border
+                          }`,
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: t.starFaint,
+                            display: "block",
+                            mb: 0.5,
+                            fontFamily: FONT.mono,
+                            fontSize: "0.65rem",
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {msg.role === "user" ? "你 · 上行链路" : "副官 · 下行链路"}
                         </Typography>
-                      )}
-                      {msg.content}
-                      {i < (localAI?.messages?.length ?? 0) - 1 && <Divider sx={{ my: 1, borderColor: t.border }} />}
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: t.star,
+                            whiteSpace: "pre-wrap",
+                            lineHeight: 1.7,
+                            fontSize: "0.88rem",
+                          }}
+                        >
+                          {msg.content}
+                        </Typography>
+                      </Box>
                     </Box>
                   ))}
+                  <div ref={messagesEndRef} />
+
                   {localAI?.isLoading && (
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, pl: 3 }}>
                       <CircularProgress size={10} sx={{ color: t.nova }} />
-                      <Typography variant="caption" sx={{ color: t.starFaint }}>
-                        生成中...
+                      <Typography variant="caption" sx={{ color: t.starFaint, fontFamily: FONT.mono }}>
+                        副官正在解码信号…
                       </Typography>
                     </Box>
                   )}
                 </Box>
+              ) : (
+                <EmptyLog t={t} inProject={inProject} />
               )}
 
               {localAI?.error && (
@@ -380,6 +436,48 @@ export default function AIChatPanel({
           </>
         )}
       </Box>
+    </Box>
+  );
+}
+
+function EmptyLog({
+  t,
+  inProject,
+}: {
+  t: typeof T.dark;
+  inProject: boolean;
+}) {
+  return (
+    <Box
+      sx={{
+        border: `1px dashed ${t.border}`,
+        borderRadius: 1,
+        p: 2,
+        display: "flex",
+        flexDirection: "column",
+        gap: 0.5,
+        background: t.dust,
+      }}
+    >
+      <Typography
+        variant="caption"
+        sx={{
+          color: t.starFaint,
+          fontFamily: FONT.mono,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+        }}
+      >
+        通讯日志 · 空
+      </Typography>
+      <Typography variant="body2" sx={{ color: t.starDim, fontSize: "0.85rem" }}>
+        {inProject
+          ? "输入第一条指令，副官会根据当前内容给出标题、标签或发布建议。"
+          : "输入第一条指令，副官会帮你命名项目、选择模板或规划创作方向。"}
+      </Typography>
+      <Typography variant="caption" sx={{ color: t.starFaint, fontFamily: FONT.mono, fontSize: "0.65rem" }}>
+        提示：输入 /switch 可切换已配置的通讯链路
+      </Typography>
     </Box>
   );
 }

@@ -35,7 +35,9 @@ import { api, Note, Post } from "../api/client";
 import { T, FONT } from "../theme";
 import MarkdownPreview from "../components/MarkdownPreview";
 import AIChatPanel from "../components/AIChatPanel";
+import OrbitRing from "../components/OrbitRing";
 import { emit } from "../lib/events";
+import { countWords, formatWordMass, massStageLabel } from "../lib/words";
 import { openPath } from "@tauri-apps/plugin-opener";
 
 const SITE_TEMPLATES = [
@@ -70,6 +72,7 @@ export default function ProjectEditor({
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [upgradeTemplate, setUpgradeTemplate] = useState("blog");
   const [savedPulse, setSavedPulse] = useState(false);
+  const [syncHint, setSyncHint] = useState(false);
   const [buildResult, setBuildResult] = useState<null | {
     success: boolean;
     outputDir: string;
@@ -98,6 +101,7 @@ export default function ProjectEditor({
 
   const items = isSite ? posts : notes;
   const selectedIsNote = !isSite;
+  const wordCount = countWords(editContent);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -245,9 +249,16 @@ export default function ProjectEditor({
         tags,
       });
     }
-    emit({ type: "save", projectId: project.id });
+    emit({
+      type: "save",
+      projectId: project.id,
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    });
     setSavedPulse(true);
+    setSyncHint(true);
     window.setTimeout(() => setSavedPulse(false), 900);
+    window.setTimeout(() => setSyncHint(false), 1800);
   };
 
   const handleCreate = () => {
@@ -398,6 +409,7 @@ export default function ProjectEditor({
                       <IconButton
                         size="small"
                         onClick={() => handleDelete(item.path)}
+                        title="让条目退场"
                       >
                         <DeleteIcon sx={{ fontSize: 14 }} />
                       </IconButton>
@@ -410,8 +422,12 @@ export default function ProjectEditor({
                       setSelected(item);
                       setIsCreating(false);
                     }}
-                    sx={{ py: 0.75 }}
+                    sx={{ py: 0.75, gap: 1 }}
                   >
+                    {/* Active orbit ring marks the currently visited star. */}
+                    {selected?.path === item.path && (
+                      <OrbitRing status="active" size={6} />
+                    )}
                     <ListItemText
                       primary={item.title || "未命名"}
                       slotProps={{
@@ -504,14 +520,31 @@ export default function ProjectEditor({
                   <MenuItem value="gallery">相册</MenuItem>
                 </Select>
               )}
-              <Button
-                variant="contained"
-                size="small"
-                onClick={isCreating ? handleCreate : handleSave}
-                sx={savedPulse ? { boxShadow: `0 0 24px ${t.novaGlow}` } : undefined}
-              >
-                {isCreating ? "点亮" : savedPulse ? "已点亮" : "保存"}
-              </Button>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                {/* Save ritual — the button pulses, and a quiet caption
+                    confirms the star's mass has been synced to the map. */}
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={isCreating ? handleCreate : handleSave}
+                  sx={savedPulse ? { boxShadow: `0 0 24px ${t.novaGlow}` } : undefined}
+                >
+                  {isCreating ? "点亮" : savedPulse ? "已点亮" : "保存"}
+                </Button>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: t.nova,
+                    fontFamily: FONT.mono,
+                    fontSize: "0.7rem",
+                    opacity: syncHint ? 1 : 0,
+                    transform: syncHint ? "translateX(0)" : "translateX(-6px)",
+                    transition: "all 0.3s ease",
+                  }}
+                >
+                  已同步至星图
+                </Typography>
+              </Box>
               {isSite && !isCreating && (
                 <Button
                   size="small"
@@ -589,6 +622,58 @@ export default function ProjectEditor({
                         "&:before, &:after": { display: "none" },
                       },
                       "& textarea": { padding: 0 },
+                    }}
+                  />
+                </Box>
+
+                {/* Star-mass readout: writing injects mass into the star. */}
+                <Box
+                  sx={{
+                    px: 4,
+                    py: 1,
+                    borderTop: `1px solid ${t.border}`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 1.5,
+                  }}
+                >
+                  <OrbitRing
+                    status={wordCount >= 1000 ? "locked" : wordCount > 0 ? "active" : "idle"}
+                    size={7}
+                  />
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: t.starFaint,
+                      fontFamily: FONT.mono,
+                      fontSize: "0.7rem",
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    星尘质量
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: t.star,
+                      fontFamily: FONT.mono,
+                      fontSize: "0.75rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    {formatWordMass(wordCount)} 字
+                  </Typography>
+                  <Chip
+                    label={massStageLabel(wordCount)}
+                    size="small"
+                    sx={{
+                      height: 18,
+                      fontSize: "0.6rem",
+                      color: t.nova,
+                      borderColor: t.nova,
+                      border: "1px solid",
+                      background: "transparent",
                     }}
                   />
                 </Box>

@@ -132,6 +132,12 @@ export default function Starfield({
     const unsub = on((e) => {
       if (e.type === "create") {
         spawnBurst(e.x, e.y, "255, 107, 107", 24);
+      } else if (e.type === "save") {
+        // A quiet nova blink where the star was saved — smaller than
+        // create/upgrade so it doesn't interrupt typing flow.
+        const cx = e.x ?? window.innerWidth / 2;
+        const cy = e.y ?? window.innerHeight / 2;
+        spawnBurst(cx, cy, "255, 107, 107", 12);
       } else if (e.type === "upgrade") {
         // A longer, brighter nova on upgrade — it's a kind of second birth.
         spawnBurst(e.x, e.y, "255, 107, 107", 40);

@@ -179,6 +179,7 @@ export default function ProjectCard({
               e.stopPropagation();
               onOpen();
             }}
+            title="进入轨道"
           >
             <OpenIcon fontSize="small" />
           </IconButton>

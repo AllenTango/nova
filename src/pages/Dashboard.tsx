@@ -25,6 +25,7 @@ import ProjectCard from "../components/ProjectCard";
 import Observatory from "../components/Observatory";
 import AIChatPanel from "../components/AIChatPanel";
 import { emit } from "../lib/events";
+import { countWords } from "../lib/words";
 
 const TEMPLATES = [
   { id: "blog", name: "博客", desc: "记录思考与生活" },
@@ -607,27 +608,4 @@ function ActiveHero({
       </Button>
     </Box>
   );
-}
-
-/// Word count for a single Markdown blob. Counts CJK characters
-/// individually and Latin word runs by token. Mirrors Observatory's
-/// helper so dashboard stages and the bottom strip agree on totals.
-function countWords(s: string): number {
-  if (!s) return 0;
-  let n = 0;
-  let inLatin = false;
-  for (const ch of s) {
-    if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(ch)) {
-      if (inLatin) inLatin = false;
-      n += 1;
-    } else if (/[A-Za-z0-9]/.test(ch)) {
-      if (!inLatin) {
-        inLatin = true;
-        n += 1;
-      }
-    } else {
-      inLatin = false;
-    }
-  }
-  return n;
 }
