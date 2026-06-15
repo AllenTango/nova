@@ -8,19 +8,20 @@ import { T, FONT } from "../theme";
  * Plays once. After it has run, localStorage keeps a flag so we
  * never replay it on the same machine.
  *
- * Sequence (~3.5 seconds):
- *   0.0s  blank void
- *   0.4s  faintest point of light appears at center
- *   1.0s  the word "nova" begins to fade in (italic serif, soft)
- *   2.0s  the typography reaches full intensity
- *   2.6s  a quiet shockwave pushes outward, then the whole
- *         thing dissolves and the dashboard is revealed
- *   3.5s  done.
+ * Budget: ≤ 1.2 seconds end-to-end (game-design §5 motion budget).
+ *
+ * Sequence (~1.1 seconds total):
+ *   0.00s  blank void
+ *   0.10s  point of light scales in (200ms ease-out)
+ *   0.30s  wordmark "✦ nova" fades in (500ms ease-out)
+ *   0.80s  whole overlay dissolves (300ms ease-in)
+ *   1.10s  done — dashboard is revealed
  *
  * For users with prefers-reduced-motion, the ceremony is
- * reduced to a single 200ms fade-in of the wordmark.
+ * reduced to a single 150ms fade-in of the wordmark.
  */
 const STORAGE_KEY = "nova.intro.seen";
+const TOTAL_MS = 1100;
 
 export default function NovaIntro({ onDone }: { onDone: () => void }) {
   const [visible, setVisible] = useState(false);
@@ -38,8 +39,10 @@ export default function NovaIntro({ onDone }: { onDone: () => void }) {
     const done = setTimeout(() => {
       localStorage.setItem(STORAGE_KEY, "1");
       setVisible(false);
-      setTimeout(onDone, 250);
-    }, reduced ? 200 : 3500);
+      // Let the dissolve animation finish before unmounting so the
+      // dashboard doesn't flash in over the wordmark.
+      setTimeout(onDone, reduced ? 0 : 320);
+    }, reduced ? 150 : TOTAL_MS);
     return () => clearTimeout(done);
   }, [onDone]);
 
@@ -55,7 +58,7 @@ export default function NovaIntro({ onDone }: { onDone: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         background: T.dark.ink,
-        animation: "nova-intro-out 0.6s ease 3.1s forwards",
+        animation: "nova-intro-out 0.3s ease-in 0.8s forwards",
         pointerEvents: "none",
       }}
     >
@@ -67,29 +70,29 @@ export default function NovaIntro({ onDone }: { onDone: () => void }) {
           justifyContent: "center",
         }}
       >
-        {/* The point of light */}
+        {/* The point of light — pulses in, then dims as the word takes over */}
         <Box
           sx={{
             position: "absolute",
-            width: 6,
-            height: 6,
+            width: 5,
+            height: 5,
             borderRadius: "50%",
             background: T.dark.nova,
-            boxShadow: `0 0 32px 8px ${T.dark.nova}`,
-            animation: "nova-intro-point 1.4s ease-out forwards",
+            boxShadow: `0 0 24px 6px ${T.dark.nova}`,
+            animation: "nova-intro-point 0.5s ease-out 0.1s forwards",
           }}
         />
-        {/* The word */}
+        {/* The wordmark */}
         <Typography
           sx={{
             fontFamily: FONT.display,
-            fontSize: { xs: "3.5rem", md: "5rem" },
+            fontSize: { xs: "3.2rem", md: "4.4rem" },
             fontWeight: 400,
             color: T.dark.star,
             letterSpacing: "-0.04em",
             fontStyle: "italic",
             fontVariationSettings: '"opsz" 144, "SOFT" 100',
-            animation: "nova-intro-word 1.8s ease-out 0.6s both",
+            animation: "nova-intro-word 0.5s ease-out 0.3s both",
           }}
         >
           <Box component="span" sx={{ color: T.dark.nova }}>
@@ -102,12 +105,11 @@ export default function NovaIntro({ onDone }: { onDone: () => void }) {
         {`
           @keyframes nova-intro-point {
             0%   { transform: scale(0.2); opacity: 0; }
-            30%  { transform: scale(1.2); opacity: 1; }
-            60%  { transform: scale(1);   opacity: 1; }
-            100% { transform: scale(0.6); opacity: 0.4; }
+            60%  { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.5); opacity: 0.3; }
           }
           @keyframes nova-intro-word {
-            0%   { opacity: 0; transform: translateY(8px); letter-spacing: 0; }
+            0%   { opacity: 0; transform: translateY(6px); letter-spacing: 0; }
             100% { opacity: 1; transform: translateY(0);   letter-spacing: -0.04em; }
           }
           @keyframes nova-intro-out {
