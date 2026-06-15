@@ -21,9 +21,9 @@ import {
 import { api, ProjectKind, isTauri } from "../api/client";
 import { T, FONT } from "../theme";
 import Starfield from "../components/Starfield";
-import ProjectCard from "../components/ProjectCard";
 import Observatory from "../components/Observatory";
 import AIChatPanel from "../components/AIChatPanel";
+import StarMap from "../components/StarMap";
 import { emit } from "../lib/events";
 import { countWords } from "../lib/words";
 
@@ -99,20 +99,10 @@ export default function Dashboard({
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.projects.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
-  });
-
   const handleCreate = () => {
     if (newName.trim()) {
       createMutation.mutate();
     }
-  };
-
-  const handleDelete = (id: string, e: React.MouseEvent) => {
-    emit({ type: "delete", x: e.clientX, y: e.clientY });
-    deleteMutation.mutate(id);
   };
 
   const notes = projects.filter((p) => p.kind === "note");
@@ -210,60 +200,38 @@ export default function Dashboard({
           />
         )}
 
-        {/* Projects */}
+        {/* Projects — true star map (game-design §4.3) */}
         {isLoading ? (
           <Typography sx={{ color: t.starDim, mt: 6 }}>正在观测…</Typography>
         ) : projects.length > 0 ? (
           <Box sx={{ mt: 5 }}>
-            {sites.length > 0 && (
-              <Section title="站点" count={sites.length} t={t}>
-                <Box
-                  sx={{
-                    display: "grid",
-                    gridTemplateColumns:
-                      "repeat(auto-fill, minmax(220px, 1fr))",
-                    gap: 2,
-                  }}
-                >
-                  {sites.map((p) => (
-                    <ProjectCard
-                      key={p.id}
-                      project={p}
-                      wordCount={wordCounts[p.id]}
-                      onOpen={() => onSelectProject(p.id)}
-                      onDelete={(e) => handleDelete(p.id, e)}
-                      themeMode={themeMode}
-                    />
-                  ))}
-                </Box>
-              </Section>
-            )}
-
-            {notes.length > 0 && (
-              <Box sx={{ mt: 4 }}>
-                <Section title="笔记" count={notes.length} t={t}>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fill, minmax(220px, 1fr))",
-                      gap: 2,
-                    }}
-                  >
-                    {notes.map((p) => (
-                      <ProjectCard
-                        key={p.id}
-                        project={p}
-                        wordCount={wordCounts[p.id]}
-                        onOpen={() => onSelectProject(p.id)}
-                        onDelete={(e) => handleDelete(p.id, e)}
-                        themeMode={themeMode}
-                      />
-                    ))}
-                  </Box>
-                </Section>
-              </Box>
-            )}
+            <StarMap
+              items={projects.map((p) => {
+                const wc = wordCounts[p.id] ?? 0;
+                // Site upgrade path (§3.2): any site is at least
+                // "恒星"; site + 1000+ words becomes "星港". Notes
+                // follow the standard mass->stage ladder.
+                const stage =
+                  p.kind === "site"
+                    ? wc >= 1000
+                      ? "星港"
+                      : "恒星"
+                    : wc >= 1000
+                      ? "新星"
+                      : wc >= 1
+                        ? "星胚"
+                        : "星尘";
+                return {
+                  id: p.id,
+                  title: p.name,
+                  kind: p.kind,
+                  mass: { count: wc, stage },
+                  updatedAt: p.updated_at,
+                };
+              })}
+              onSelect={onSelectProject}
+              themeMode={themeMode}
+            />
           </Box>
         ) : null}
 
@@ -451,49 +419,6 @@ export default function Dashboard({
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
-  );
-}
-
-function Section({
-  title,
-  count,
-  t,
-  children,
-}: {
-  title: string;
-  count: number;
-  t: typeof T.dark;
-  children: React.ReactNode;
-}) {
-  return (
-    <Box>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          mb: 1.5,
-        }}
-      >
-        <Typography
-          variant="overline"
-          sx={{ color: t.starFaint, fontSize: "0.7rem" }}
-        >
-          {title}
-        </Typography>
-        <Typography
-          variant="caption"
-          sx={{
-            color: t.starFaint,
-            fontFamily: FONT.mono,
-            fontSize: "0.7rem",
-          }}
-        >
-          {count}
-        </Typography>
-      </Box>
-      {children}
     </Box>
   );
 }
