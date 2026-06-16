@@ -65,7 +65,7 @@ pub struct UpdateProvider {
     pub api_key: Option<String>,
 }
 
-pub const PRESET_FAMILIES: &[&str] = &["openai", "anthropic", "google"];
+pub const PRESET_FAMILIES: &[&str] = &["openai", "anthropic", "ollama"];
 
 // ── 统一配置文件 ──────────────────────────────────────
 

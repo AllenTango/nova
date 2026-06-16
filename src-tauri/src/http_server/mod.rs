@@ -435,11 +435,6 @@ fn resolve_stream_endpoint<'a>(provider: &str, base_url: &str, api_key: &str) ->
             };
             (url, String::new(), "none")
         }
-        "google" => (
-            format!("{}/models/{}:generateContent?key={}", trimmed, "", api_key),
-            String::new(),
-            "none",
-        ),
         _ => {
             let url = if trimmed.ends_with("/chat/completions") {
                 trimmed.to_string()

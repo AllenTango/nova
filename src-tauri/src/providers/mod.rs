@@ -6,7 +6,7 @@
 //!
 //!   1. 用户添加的条目——由 Settings 里的 `add_provider` /
 //!      `remove_provider` 命令写入。会持久化到 JSON 文件。
-//!   2. 内置预设（OpenAI / Anthropic / Google）——来自 Rust 静态
+//!   2. 内置预设（OpenAI / Anthropic / Ollama）——来自 Rust 静态
 //!      `PROVIDER_REGISTRY`。仅当用户在
 //!      `config.json::provider_secrets` 里存了匹配的 API key
 //!      时才出现在列表里；否则隐藏。

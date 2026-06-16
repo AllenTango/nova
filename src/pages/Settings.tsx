@@ -37,10 +37,11 @@ import Starfield from "../components/Starfield";
 // Picker entries for the unified "Add model provider" radio dialog.
 //
 // The list combines the three built-in presets (OpenAI / Anthropic /
-// Google — these are static entries in Rust `PROVIDER_REGISTRY` and
-// always exist) with the three user-addable categories (Ollama /
-// OpenAI-compatible / Anthropic-compatible). The "保存" button fans
-// out to either `add_provider` (user-addable) or `update_provider`
+// Ollama — these are static entries in Rust `PROVIDER_REGISTRY` and
+// always exist) with the two Custom user-addable categories
+// (OpenAI-compatible / Anthropic-compatible, both routed through the
+// Custom family — users supply their own base_url). The "保存" button
+// fans out to either `add_provider` (user-addable) or `update_provider`
 // (preset, since the preset row already exists) — see `submitPicker`
 // for the routing.
 //
@@ -50,7 +51,6 @@ import Starfield from "../components/Starfield";
 type PickerKind =
   | "openai"
   | "anthropic"
-  | "google"
   | "ollama"
   | "openai_compat"
   | "anthropic_compat";
@@ -69,7 +69,7 @@ const PICKER_OPTIONS: {
   /// Whether the user can edit the Base URL. False for presets —
   /// their base URL is fixed in Rust's PROVIDER_REGISTRY and the
   /// picker just shows the canonical value as a read-only field.
-  /// True for the three user-addable categories.
+  /// True for the two Custom user-addable categories.
   baseUrlEditable: boolean;
   apiKeyRequired: boolean;
   apiKeyHelp: string;
@@ -97,17 +97,6 @@ const PICKER_OPTIONS: {
     baseUrlEditable: false,
     apiKeyRequired: true,
     apiKeyHelp: "Anthropic Console 申请的 sk-ant-… 密钥",
-    mode: "preset",
-  },
-  {
-    kind: "google",
-    label: "Google (Gemini)",
-    id: "google",
-    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    idEditable: false,
-    baseUrlEditable: false,
-    apiKeyRequired: true,
-    apiKeyHelp: "Google AI Studio 申请的 API Key",
     mode: "preset",
   },
   {
@@ -264,7 +253,7 @@ export default function SettingsPage({
     setPickerSelectedModel("");
     try {
       // Rust `ProviderFactory::list_models` keys on the family
-      // string ("openai" / "anthropic" / "google" / "ollama"), not
+      // string ("openai" / "anthropic" / "ollama"), not
       // the PickerKind. Compat picker entries map to the family
       // they delegate to.
       const fetchProvider =
