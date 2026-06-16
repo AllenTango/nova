@@ -84,9 +84,10 @@ pub trait LLMClient: Send {
 | Provider | 协议 | chunk 形状 | 终止标志 | usage 抓取 |
 |---|---|---|---|---|
 | OpenAI / 兼容 | `data: {choices:[{delta:{content:"..."}}]}` | 标准 SSE | `data: [DONE]` | 末 chunk 带 `usage` |
-| Anthropic | event-based: `content_block_delta` → `delta.text` | event + data 配对 | `message_stop` | `message_delta.usage` |
-| Google Gemini | `data: {candidates:[{content:{parts:[{text:"..."}]}}]}` | 标准 SSE | 自然结束（无 [DONE]） | 暂不抓 |
+| Anthropic / 兼容 | event-based: `content_block_delta` → `delta.text` | event + data 配对 | `message_stop` | `message_delta.usage` |
 | Ollama | NDJSON（**不是** SSE），每行完整 JSON `{message:{content:"..."}, done:false}` | NDJSON | `done: true` | 暂不抓 |
+
+注：Custom family 不单独列——`openai_compat` 走 OpenAI 行，`anthropic_compat` 走 Anthropic 行，仅 base_url 由用户填。
 
 ⚠️ **Ollama 嘅 NDJSON 陷阱**：每行**完整 JSON 对象**，唔系 SSE 嘅 `data: …` 前缀。如果照搬 SSE parser 解析会爆。Ollama 嘅 parser 系行-based `BufRead::read_line`。
 

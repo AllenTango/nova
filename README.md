@@ -7,7 +7,7 @@ Nova 是一款面向普通人与 AI Agent 的桌面建站工具。管理站点�
 - **多站点管理** - 仪表盘卡片式概览，轻松管理多个站点
 - **Markdown 编辑** - 所见即所得的编辑体验，支持实时预览
 - **Astro 驱动** - 内部调用 Astro 框架，生成高性能静态/SSR 站点
-- **AI 辅助** - 内置 AI 对话面板，可配置 OpenAI/Anthropic/Google/Ollama 等服务商
+- **AI 辅助** - 内置 AI 对话面板，可配置 OpenAI/Anthropic/Ollama 等服务商，也支持 Custom（OpenAI / Anthropic 兼容）
 - **模板系统** - 内置多种模板（博客/相册/企业官网等），一键克隆使用
 - **Agent 集成** - 支持 MCP 协议，外部 AI 工具可直接调用 Nova 能力
 
@@ -92,7 +92,7 @@ nova/
 │   │   ├── providers.rs    # 供应商 CRUD
 │   │   ├── settings.rs     # 端口设置
 │   │   └── deploy.rs
-│   ├── provider/           # AI 供应商传输层（openai/anthropic/google/ollama，4 provider 真 SSE override）
+│   ├── provider/           # AI 供应商传输层（openai/anthropic/ollama 三个 preset + Custom 走同两个 client，4 family 真 SSE override）
 │   ├── providers/          # 供应商列表组装（preset + user）
 │   ├── db/                 # SQLite 数据库
 │   ├── http_server/        # HTTP API 服务器（/health + /v1/chat/completions，未来 + /mcp）

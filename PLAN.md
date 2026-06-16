@@ -232,8 +232,8 @@ tags: [tag1, tag2]
 | 后端配置 | SSR 模式、数据库、认证、支付 |
 
 **AI 服务商配置**：
-- 预设供应商：OpenAI、Anthropic、Google (Gemini) — 仅当 `~/.nova/config.json::provider_secrets` 存在对应 key 时才在列表中显示（未配置 = 不出现）
-- 用户可添加：Ollama（本地）、OpenAI 兼容、Anthropic 兼容
+- 预设供应商：OpenAI、Anthropic、Ollama — 仅当 `~/.nova/config.json::provider_secrets` 存在对应 key 时才在列表中显示（未配置 = 不出现）
+- 用户可添加：Custom — OpenAI 兼容 或 Anthropic 兼容（按 `kind=openai_compat / anthropic_compat` 区分协议，user 自填 base_url）
 - 所有配置统一存储在 `~/.nova/config.json`（供应商条目 + API 密钥 + 端口 + 主题），**不入 SQLite**
 - 环境变量 (`OPENAI_API_KEY` 等) **不再读取**——Settings UI 是唯一入口，凭证来源 100% config.json
 
@@ -255,7 +255,7 @@ Nova webview ↔ Rust backend 全走 **Tauri IPC**（`#[tauri::command]` + `taur
 | **内部**：Nova webview ↔ Rust | Tauri 2 IPC + `Channel<ChatEvent>` | AIChatPanel 流式对话（v1.x 命题 A） |
 | **外部**：Rust ↔ 外部 AI 客户端 | HTTP `/v1/chat/completions` | OpenAI 兼容入口，Hermes 等可直连 |
 | **外部**：Rust ↔ 外部 AI 客户端 | HTTP `/mcp` | MCP Streamable HTTP（v2.x 命题 B） |
-| **内部**：Rust ↔ 外部 provider | HTTPS | OpenAI / Anthropic / Google / Ollama |
+| **内部**：Rust ↔ 外部 provider | HTTPS | OpenAI / Anthropic / Ollama（+ Custom 走 OpenAI 或 Anthropic 协议） |
 
 详细架构决策见 [ADR 0002](docs/architecture-decisions/0002-chat-ipc-streaming.md)。
 
@@ -540,9 +540,9 @@ nova/
 │   │   ├── settings.rs     # 端口设置命令
 │   │   └── deploy.rs
 │   ├── provider/           # AI 供应商传输层
-│   │   ├── config.rs       # 供应商注册表（openai/anthropic/google/ollama）
-│   │   ├── openai.rs / anthropic.rs / google.rs / ollama.rs
-│   │   └── mod.rs          # ProviderFactory + LLMClient trait + chat_stream 4 provider override
+│   │   ├── config.rs       # 供应商注册表（openai/anthropic/ollama + Custom 动态组装）
+│   │   ├── openai.rs / anthropic.rs / ollama.rs
+│   │   └── mod.rs          # ProviderFactory + LLMClient trait + chat_stream 4 family override
 │   ├── providers/
 │   │   └── mod.rs          # 供应商列表组装（preset + user，preset 仅当 config.json 有 secret 才显示）
 │   ├── db/
@@ -569,7 +569,7 @@ nova/
 ### 2026-06-15：命题 A 落地（chat IPC 流式）
 
 - **架构**：Nova webview ↔ Rust chat 通讯从 HTTP fetch + SSE wire 解析改为 **Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式**。详见 [ADR 0002](docs/architecture-decisions/0002-chat-ipc-streaming.md)。
-- **Provider 抽象**：`LLMClient` trait 加 `chat_stream` 默认实现 + 4 个 provider 各自 override 真 SSE 转发（OpenAI 标准 SSE / Anthropic event-based SSE / Google Gemini 标准 SSE / Ollama NDJSON）。
+- **Provider 抽象**：`LLMClient` trait 加 `chat_stream` 默认实现 + 4 family 各自 override 真 SSE 转发（OpenAI 标准 SSE / Anthropic event-based SSE / Ollama NDJSON / Custom 路由到对应 client）。
 - **http_server 收紧**：内部 `/v1/chat/completions` 路由**保留**作外部 OpenAI 兼容客户端入口（`/health` 同样保留）。`nova_port` 配置保留作 MCP 未来用。
 - **删除**：`test_ai_provider` Tauri command（冗余，list_models 已隐式验证）。
 - **硬编码清理**：`ANTHROPIC_MODELS` 11 条硬编码删除，改为 `GET /v1/models` 实时拉取。**所有 4 provider 嘅 list_models 都走 API**。

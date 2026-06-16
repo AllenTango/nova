@@ -22,7 +22,7 @@
 | **内部通讯** | Tauri 2 IPC + `tauri::ipc::Channel<T>` 流式（v1.x） |
 | **外部通讯** | OpenAI 兼容 HTTP `/v1/chat/completions`（v1.x）+ MCP `/mcp`（v2.x） |
 | **AI 凭据** | `~/.nova/config.json::provider_secrets` 唯一来源，**不读环境变量** |
-| **Provider** | 4 个：OpenAI / Anthropic / Google Gemini / Ollama，全部走 `list_models` API |
+| **Provider** | 4 family：OpenAI / Anthropic / Ollama 三个内置 preset + Custom（用户自填 base_url 路由 OpenAI 或 Anthropic 协议），全部走 `list_models` API |
 
 详细架构见 [`PLAN.md`](PLAN.md)，游戏化规范见 [`docs/game-design.md`](docs/game-design.md)，设计 token 见 [`docs/design-tokens.md`](docs/design-tokens.md)。
 
