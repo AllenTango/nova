@@ -1,5 +1,6 @@
 use crate::commands::settings::DefaultTarget;
 use crate::db::Database;
+use crate::nova_config;
 use crate::providers;
 use crate::provider::{ChatMessage, ChatRequest, ProviderFactory};
 use serde::{Deserialize, Serialize};
@@ -32,91 +33,76 @@ pub struct ChatOverrides {
     pub provider_id: Option<String>,
 }
 
-/// 从启动期默认值和 overrides 解析 provider 凭据
-/// （provider + api_key + base_url）。不解析 model——需要 model 的
-/// 调用方（chat、test）自己解析完之后再校验。
+/// 从 `NovaConfig.default_provider_id` / `default_model_id` 解析
+/// 出站 AI 调用嘅凭据（ADR 0003 §3.2）。
+///
+/// Stage 2 之后：default 字段系权威来源。`ProviderEntry.models[].is_default`
+/// 同 `ProviderEntry.model: String` 唔再参与 default 推导。
+///
+/// Inline overrides（`provider_id` / `model` 字段）保留作为
+/// debug / test 路径；生产 `ai_chat` 调用唔带 overrides，直接用 default。
 fn resolve_credentials(
     app: &tauri::AppHandle,
     overrides: Option<&ChatOverrides>,
 ) -> Result<ResolvedTarget, String> {
-    let mut target = ResolvedTarget {
-        provider: String::new(),
-        api_key: None,
-        base_url: None,
-        model: String::new(),
+    let config = nova_config::read_config(app);
+
+    // ADR 0003 Stage 1+：default 字段系权威来源
+    let (default_pid, default_mid) = match (
+        config.default_provider_id.as_deref(),
+        config.default_model_id.as_deref(),
+    ) {
+        (Some(p), Some(m)) => (p, m),
+        _ => {
+            return Err(
+                "default model 未配置——open Settings 添加供应商时选定模型即自动设为默认"
+                    .into(),
+            );
+        }
     };
 
-    // 1. Boot-time default — derived from config.json.
-    let list = providers::list_all(app)?;
-    if let Some(entry) = list.iter().find(|p| p.models.iter().any(|m| m.is_default)) {
-        target.provider = entry.family.clone();
-        target.base_url = Some(entry.base_url.clone());
-        target.model = entry
-            .models
-            .iter()
-            .find(|m| m.is_default)
-            .map(|m| m.id.clone())
-            .unwrap_or_default();
-        if let Ok(Some(key)) = providers::resolve_api_key(app, &entry.id) {
-            target.api_key = Some(key);
-        }
-    }
-
-    // 2. Provider-id override.
-    if let Some(pid) = overrides
+    // Inline overrides 仅作 debug / test 用
+    let pid = overrides
         .and_then(|o| o.provider_id.as_deref())
         .filter(|s| !s.trim().is_empty())
-    {
-        if let Some(entry) = list.iter().find(|p| p.id == *pid) {
-            target.provider = entry.family.clone();
-            target.base_url = Some(entry.base_url.clone());
-            if let Ok(Some(key)) = providers::resolve_api_key(app, pid) {
-                target.api_key = Some(key);
-            }
-            if !entry.model.is_empty() {
-                target.model = entry.model.clone();
-            }
-        }
-    }
+        .unwrap_or(default_pid);
+    let mid = overrides
+        .and_then(|o| o.model.as_deref())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_mid);
 
-    // 3. Inline overrides — explicit per-call values.
-    if let Some(ov) = overrides {
-        if let Some(v) = ov.provider.as_deref().filter(|s| !s.trim().is_empty()) {
-            target.provider = v.to_string();
-        }
-        if let Some(v) = ov.api_key.as_deref().filter(|s| !s.is_empty()) {
-            target.api_key = Some(v.to_string());
-        }
-        if let Some(v) = ov.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
-            target.base_url = Some(v.to_string());
-        }
-        if let Some(v) = ov.model.as_deref().filter(|s| !s.trim().is_empty()) {
-            target.model = v.to_string();
-        }
-    }
+    // 搵 entry（preset 或 user）
+    let list = providers::list_all(app)?;
+    let entry = list
+        .iter()
+        .find(|p| p.id == pid)
+        .ok_or_else(|| format!("default provider not found: {pid}"))?;
 
-    if target.provider.is_empty() {
-        return Err(
-            "no AI provider configured — open Settings and pick a default model".to_string(),
-        );
-    }
-    Ok(target)
+    // 唔本地验证 model 是否在 entry.models —— models 不持久化（ADR 0003
+    // §3.1.2），本地检查会因供应商 model 变动出现 false negative。
+    // 上游 chat 收到无效 model_id 时会返 4xx，由 Stage 4 fallback 处理。
+
+    let api_key = providers::resolve_api_key(app, &entry.id).unwrap_or(None);
+
+    Ok(ResolvedTarget {
+        provider: entry.family.clone(),
+        api_key,
+        base_url: Some(entry.base_url.clone()),
+        model: mid.to_string(),
+    })
 }
 
-/// 从启动期默认值和 overrides 构造 `ResolvedTarget`。
-/// 要求 model 已设置（来自默认值、provider 条目或 override）。
+/// 从 default 字段 + overrides 构造 `ResolvedTarget`。
+/// ADR 0003 Stage 2：`resolve_credentials` 已经验证 default 字段存在
+/// 并提供 model，所以此处唔再做 `model.is_empty()` check——早 fail
+/// 早受益（用户会睇到「default model 未配置」错误而非含糊嘅
+/// 「no default model configured」）。
 async fn resolve_target(
     app: &tauri::AppHandle,
     _db: &Database,
     overrides: Option<ChatOverrides>,
 ) -> Result<ResolvedTarget, String> {
     let mut target = resolve_credentials(app, overrides.as_ref())?;
-
-    if target.model.trim().is_empty() {
-        return Err(
-            "no default model configured — open Settings and mark a model as default".to_string(),
-        );
-    }
 
     target.model = normalize_model_name(
         &target.model,
@@ -204,10 +190,19 @@ pub async fn ai_chat(
     db: State<'_, SharedDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    eprintln!("[DEBUG ai_chat] ENTERED — prompt_len={}, system_prompt={:?}, overrides={:?}", prompt.len(), system_prompt, overrides);
     let target = {
         let db = db.lock().await;
         resolve_target(&app, &db, overrides).await?
     };
+
+    eprintln!(
+        "[DEBUG ai_chat] provider={}, base_url={}, model={}, api_key_set={}",
+        target.provider,
+        target.base_url.as_deref().unwrap_or(""),
+        target.model,
+        target.api_key.is_some(),
+    );
 
     let client = ProviderFactory::create_client(
         &target.provider,
@@ -251,7 +246,10 @@ pub async fn ai_chat(
         })
     })
     .await
-    .map_err(|e| format!("blocking task 失败：{e}"))?;
+    .map_err(|e| {
+        eprintln!("[DEBUG ai_chat] blocking task failed: {}", e);
+        format!("blocking task 失败：{e}")
+    })?;
 
     match result {
         Ok(response) => {
@@ -260,6 +258,7 @@ pub async fn ai_chat(
             let _ = on_event.send(ChatEvent::Done { usage: response.usage });
         }
         Err(e) => {
+            eprintln!("[DEBUG ai_chat] stream error: {}", e);
             let _ = on_event.send(ChatEvent::Error { message: e });
         }
     }

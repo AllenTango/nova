@@ -23,10 +23,12 @@
 //!   - `Accept: text/event-stream` header 帮助部分 server 走 SSE 模式。
 
 use crate::provider::{ChatRequest, ChatResponse, LLMClient, StreamCallback, Usage};
-use reqwest::blocking::Client;
-use std::io::{BufRead, BufReader};
+use futures_util::StreamExt;
+use reqwest::Client;
 
 /// POST {base_url}/chat/completions 带 `stream: true`，逐行解析 SSE。
+/// 用 async reqwest + 同步 `block_on` 在已有 tokio runtime 里跑——
+/// 完全避开 `reqwest::blocking` 内部 runtime 冲突。
 fn stream_openai_chat(
     http: &Client,
     url: &str,
@@ -34,73 +36,88 @@ fn stream_openai_chat(
     body: serde_json::Value,
     on_delta: StreamCallback,
 ) -> Result<ChatResponse, String> {
-    let response = http
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .json(&body)
-        .send()
-        .map_err(|e| format!("OpenAI 请求失败：{}", e))?;
+    let rt = tokio::runtime::Handle::current();
+    let response = rt.block_on(async {
+        http.post(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI 请求失败：{}", e))
+    })?;
 
     let status = response.status();
     if !status.is_success() {
-        // 错误响应一次性读 body
-        let text = response.text().unwrap_or_default();
-        return Err(format!("OpenAI 返回 {}：{}", status, text));
+        // 错误响应：用 `bytes()` 一次性 read（async runtime 控制），不会
+        // 触发 "Cannot drop a runtime in a context where blocking is not allowed"。
+        let _ = rt.block_on(async {
+            response.bytes().await.map(|_| ()).unwrap_or(())
+        });
+        return Err(format!("OpenAI 返回 {}", status));
     }
 
-    // 流式逐行读 SSE。`reqwest::blocking::Response` 本身实现 `Read`，
-    // 直接包 BufReader。每行 read_line 一到就解 chunk 推 delta，
-    // 唔等 chunked transfer 关闭。
-    let mut reader = BufReader::new(response);
-    let mut buf = String::new();
+    // 流式逐行读 SSE。直接把 `bytes_stream()` 用 async runtime 消费，
+    // 逐 chunk decode UTF-8 然后手动拆行。完全在 async runtime 里跑，
+    // 唔用 blocking Read API，避免 "Cannot drop a runtime" panic。
+    let mut stream = response.bytes_stream();
+    let mut leftover = String::new(); // 半截行跨 chunk 缓存
     let mut full_text = String::new();
     let mut usage: Option<Usage> = None;
 
-    loop {
-        buf.clear();
-        let n = reader
-            .read_line(&mut buf)
-            .map_err(|e| format!("SSE 读取失败：{}", e))?;
-        if n == 0 {
-            // 流结束
-            break;
-        }
-        let line = buf.trim_end();
-        // 同时兼容 "data: {...}" 和 "data:{...}"（部分 server 唔带空格）
-        let Some(payload) = line
-            .strip_prefix("data: ")
-            .or_else(|| line.strip_prefix("data:"))
-        else {
-            continue;
-        };
-        let payload = payload.trim();
-        if payload == "[DONE]" {
-            break;
-        }
-        if payload.is_empty() {
-            continue;
-        }
-        let json: serde_json::Value = match serde_json::from_str(payload) {
-            Ok(v) => v,
-            Err(_) => continue, // 跳过心跳/空行/格式异常行
-        };
-        if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
-            if !delta.is_empty() {
-                full_text.push_str(delta);
-                on_delta(delta)?;
+    rt.block_on(async {
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result
+                .map_err(|e| format!("SSE 读取失败：{}", e))?;
+            // 追加到遗留缓冲区
+            leftover.push_str(&String::from_utf8_lossy(&chunk));
+
+            // 按 `\n` 拆行；最后一行可能不完整，留到下次 chunk
+            let mut lines: Vec<String> = leftover
+                .split('\n')
+                .map(|s| s.to_string())
+                .collect();
+            // 最后一截可能不完整
+            let tail = lines.pop().unwrap_or_default();
+            leftover = tail;
+
+            for line in lines {
+                let line = line.trim_end_matches('\r');
+                let Some(payload) = line
+                    .strip_prefix("data: ")
+                    .or_else(|| line.strip_prefix("data:"))
+                else {
+                    continue;
+                };
+                let payload = payload.trim();
+                if payload == "[DONE]" {
+                    return Ok::<_, String>(());
+                }
+                if payload.is_empty() {
+                    continue;
+                }
+                let json: serde_json::Value = match serde_json::from_str(payload) {
+                    Ok(v) => v,
+                    Err(_) => continue, // 跳过心跳/空行/格式异常行
+                };
+                if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
+                    if !delta.is_empty() {
+                        full_text.push_str(delta);
+                        on_delta(delta)?;
+                    }
+                }
+                if let Some(u) = json.get("usage") {
+                    usage = Some(Usage {
+                        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                        total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
+                    });
+                }
             }
         }
-        // 部分 OpenAI 兼容实现（如 DeepSeek）把 usage 放进最后一个 chunk
-        if let Some(u) = json.get("usage") {
-            usage = Some(Usage {
-                prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-                total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-            });
-        }
-    }
+        Ok::<_, String>(())
+    })?;
 
     Ok(ChatResponse {
         content: full_text,
@@ -126,6 +143,8 @@ impl OpenAIClient {
 
     /// 非流式 fallback：调 `/v1/chat/completions` 不带 `stream`，
     /// 一次性返回。供 `chat()` 走测试 / list_models 等不走流式的场景。
+    /// 用 async reqwest + block_on 在已有 tokio runtime 里跑——
+    /// 完全避开 `reqwest::blocking` 内部 runtime 冲突。
     pub fn chat_blocking(&self, request: ChatRequest) -> Result<ChatResponse, String> {
         let url = resolve_chat_url(&self.base_url);
         let body = serde_json::json!({
@@ -135,17 +154,22 @@ impl OpenAIClient {
             "max_tokens": request.max_tokens.unwrap_or(2048),
         });
 
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .map_err(|e| e.to_string())?;
+        let rt = tokio::runtime::Handle::current();
+        let (status, text) = rt.block_on(async {
+            let resp = self
+                .http
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| e.to_string())?;
+            Ok::<_, String>((status, text))
+        })?;
 
-        let status = response.status();
-        let text = response.text().map_err(|e| e.to_string())?;
         if !status.is_success() {
             return Err(format!("OpenAI 兼容 provider 返回 {}：{}", status, text));
         }

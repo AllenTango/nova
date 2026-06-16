@@ -107,11 +107,11 @@ export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
   );
 
   const handleSubmit = useCallback(
-    (e?: React.FormEvent) => {
+    (text: string, e?: React.FormEvent) => {
       e?.preventDefault();
-      sendMessage(input);
+      sendMessage(text);
     },
-    [input, sendMessage]
+    [sendMessage]
   );
 
   const handleInputChange = useCallback(
@@ -131,8 +131,10 @@ export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
   return {
     messages,
     input,
+    setInput,
     handleInputChange,
     handleSubmit,
+    sendMessage,
     isLoading,
     setMessages,
     error,

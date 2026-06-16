@@ -95,6 +95,8 @@ pub fn run() {
             commands::providers::update_provider,
             commands::providers::remove_provider,
             commands::providers::resolve_provider_key,
+            commands::settings::set_default_model,
+            commands::settings::get_default_model,
         ])
         .setup(move |app| {
             let nova_home = get_nova_home();
@@ -111,6 +113,13 @@ pub fn run() {
             // 每次启动都跑都安全。
             commands::settings::purge_legacy_ai_keys(&db);
             drop(db);
+
+            // ADR 0003 Stage 1：启动期迁移旧 config.json 至显式
+            // default 字段。幂等，无副作用。失败只 eprintln，唔阻塞
+            // app 启动——用户仍可手动调 set_default_model。
+            if let Err(e) = nova_config::migrate_default_state(app.handle()) {
+                eprintln!("[migrate_default_state] failed: {}", e);
+            }
 
             let bad_runtime_root = repo_root.join("src-tauri").join("~");
             let _ = std::fs::remove_dir_all(&bad_runtime_root);

@@ -153,7 +153,9 @@ export interface UpdateProvider {
   id: string;
   label?: string;
   base_url?: string;
-  model?: string;
+  // ADR 0003 Stage 2 cleanup：`model` 字段移除——update 路径不做
+  // set_default（避免 silent override 当前 default）。改 default 走
+  // `api.ai.setDefault`。
   api_key?: string;
 }
 
@@ -266,6 +268,19 @@ export const api = {
       }),
     listModels: (overrides?: ChatOverrides) =>
       invoke<string[]>("list_models", { overrides }),
+    /// ADR 0003 §3.5：副官「默认模型」嘅单一权威写入入口。
+    /// 副官 `/switch` 同 Settings UI 共用此 API。
+    setDefault: (providerId: string, modelId: string) =>
+      invoke<void>("set_default_model", { providerId, modelId }),
+    /// 读当前 default（前端 chip / UI 提示用）。
+    /// **wire format snake_case**——Rust `DefaultModelState` struct 默认
+    /// serialize snake_case（Tauri 2 invoke return value 唔会自动
+    /// camelCase 转换，只 args 转换）。Bug A fix：之前用 camelCase
+    /// 攞到 undefined。
+    getDefault: () =>
+      invoke<{ provider_id: string | null; model_id: string | null }>(
+        "get_default_model"
+      ),
   },
 
   settings: {

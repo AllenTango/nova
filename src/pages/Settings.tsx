@@ -16,6 +16,9 @@ import {
   Chip,
   CircularProgress,
   IconButton,
+  List,
+  ListItemButton,
+  ListItemText,
 } from "@mui/material";
 import {
   ArrowBack as BackIcon,
@@ -154,7 +157,22 @@ export default function SettingsPage({
 
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [providersError, setProvidersError] = useState<string>("");
+  // ADR 0003 §3.7：当前 default provider / model。`None` 即未配置。
+  const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
+  const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
+  // Stage 3：「设为默认」对话框状态——点击 row 嘅「设为默认」按钮后
+  // 弹 dialog，实时拉 list_models 让用户选 model，写入 default 字段。
+  const [defaultPickerOpen, setDefaultPickerOpen] = useState(false);
+  const [defaultPickerProviderId, setDefaultPickerProviderId] = useState<string | null>(null);
+  const [defaultPickerModels, setDefaultPickerModels] = useState<string[]>([]);
+  const [defaultPickerModelsLoading, setDefaultPickerModelsLoading] = useState(false);
+  const [defaultPickerError, setDefaultPickerError] = useState<string>("");
+  const [defaultPickerSubmitting, setDefaultPickerSubmitting] = useState(false);
   const [portsSynced, setPortsSynced] = useState(false);
+  // ADR 0003 Stage 4 fix：初始 picker「扫描频段」前先临时保存 provider
+  //（persist api_key），然后用 `api.providers.listModels(providerId)` 拉模型。
+  // 保存后若用户取消，需要回滚。
+  const [pickerScanTempId, setPickerScanTempId] = useState<string | null>(null);
 
   // The page no longer keeps per-provider model caches here — the
   // "Add" dialog owns its own `pickerModels` state. The single
@@ -196,6 +214,17 @@ export default function SettingsPage({
         console.error("[providers] hydrate failed:", e);
         setProvidersError(e instanceof Error ? e.message : String(e));
       });
+    // ADR 0003 §3.7：拉 default 字段用于 row 嘅 default chip 渲染。
+    // wire format snake_case（Bug A fix）。
+    api.ai
+      .getDefault()
+      .then((d) => {
+        if (d) {
+          setDefaultProviderId(d.provider_id);
+          setDefaultModelId(d.model_id);
+        }
+      })
+      .catch((e) => console.error("[default] hydrate failed:", e));
   }, []);
 
   // ── Picker dialog handlers ──────────────────────────────────
@@ -236,9 +265,6 @@ export default function SettingsPage({
   const fetchPickerModels = async () => {
     const opt = PICKER_OPTIONS.find((o) => o.kind === pickerKind);
     if (!opt) return;
-    // Light client-side guard — full validation is server-side, but
-    // an obviously-empty key (when required) is just a wasted round
-    // trip to the upstream.
     if (opt.apiKeyRequired && !pickerApiKey.trim()) {
       setPickerModelsError("请先填接入密钥再扫描频段");
       return;
@@ -247,26 +273,56 @@ export default function SettingsPage({
       setPickerModelsError("请先填 Base URL 再扫描频段");
       return;
     }
+    const finalId = pickerId.trim();
+    if (!finalId) {
+      setPickerModelsError("请填写 ID");
+      return;
+    }
+
     setPickerModelsLoading(true);
     setPickerModelsError("");
     setPickerModels([]);
     setPickerSelectedModel("");
+    setPickerScanTempId(null);
     try {
-      // Rust `ProviderFactory::list_models` keys on the family
-      // string ("openai" / "anthropic" / "ollama"), not
-      // the PickerKind. Compat picker entries map to the family
-      // they delegate to.
-      const fetchProvider =
-        pickerKind === "openai_compat"
-          ? "openai"
-          : pickerKind === "anthropic_compat"
-          ? "anthropic"
-          : pickerKind;
-      const list = await api.ai.listModels({
-        provider: fetchProvider,
-        api_key: pickerApiKey,
-        base_url: pickerBaseUrl.trim(),
-      });
+      // ADR 0003 Stage 4 fix：「扫描频段」前先临时保存 provider
+      //（persist api_key/base_url），然后用 `api.providers.listModels`
+      // 正确拉模型——之前的 `api.ai.listModels({ api_key, base_url })`
+      // 传入的 override 字段被 Rust `resolve_credentials` 完全忽略
+      //（只看 provider_id fallback to default_pid）。
+      let savedId: string;
+      if (opt.mode === "preset") {
+        // Preset 行（openai / anthropic）：update 已有 entry
+        await api.providers.update({
+          id: finalId,
+          base_url: pickerBaseUrl.trim(),
+          api_key: pickerApiKey,
+        } as UpdateProvider);
+        savedId = finalId;
+      } else {
+        // User 行（ollama / openai_compat / anthropic_compat）：
+        // add 新 entry，idEditable=true 所以 finalId 系用户填的
+        await api.providers.add({
+          id: finalId,
+          label: opt.label,
+          family:
+            pickerKind === "openai_compat"
+              ? "openai"
+              : pickerKind === "anthropic_compat"
+              ? "anthropic"
+              : pickerKind,
+          kind:
+            pickerKind === "anthropic_compat" ? "anthropic_compat" : "openai_compat",
+          base_url: pickerBaseUrl.trim(),
+          model: "",
+          api_key: pickerApiKey,
+        } as NewProvider);
+        savedId = finalId;
+        setPickerScanTempId(savedId); // 取消时回滚删除
+      }
+
+      // 用正确保存的 api_key 拉模型列表
+      const list = await api.providers.listModels(savedId);
       setPickerModels(list);
       if (list.length === 0) {
         setPickerModelsError("未收到信号，请检查接入密钥或 Base URL");
@@ -313,14 +369,18 @@ export default function SettingsPage({
         // registry, so we UPDATE it instead of adding. `add_provider`
         // would reject us because presets use `kind=Preset`, and
         // `add_provider` only accepts OpenaiCompat / AnthropicCompat.
-        // We send base_url + model + api_key; the backend ignores
-        // immutable fields if we accidentally include them.
+        // ADR 0003 Stage 2 cleanup：`model` 字段从 update 移除——
+        // 改 default 走独立 `api.ai.setDefault` 调用，避免 silent
+        // override 当前 default 状态。
         const updated = await api.providers.update({
           id: finalId,
           base_url: pickerBaseUrl.trim(),
-          model: pickerSelectedModel,
           api_key: pickerApiKey, // empty string = leave unchanged
         } as UpdateProvider);
+        // ADR 0003：preset 路径保存后若 default 未初始化，自动
+        // set_default 到新选定嘅 model（同 `add` 路径初始化语义）。
+        // 已有 default 时唔动——用户可后续手动 /switch 切换。
+        await maybeInitDefaultFromPreset(finalId, pickerSelectedModel);
         setProviders((prev) =>
           prev.map((p) => (p.id === updated.id ? updated : p))
         );
@@ -328,13 +388,25 @@ export default function SettingsPage({
         return;
       }
 
-      // User-addable path: fan out to `add_provider`. Compat
-      // picker entries (openai_compat / anthropic_compat) carry
-      // their kind qualifier in the `kind` field; the underlying
-      // `family` is the openai/anthropic family they delegate to.
-      // Ollama routes through the OpenAI-compatible surface
-      // (`http://localhost:11434/v1/...`) and so also uses
-      // `kind=openai_compat` with `family="ollama"`.
+      // User-addable path: fetchPickerModels 已经 add 过 provider
+      //（persist api_key），此处不再重复 add——直接 update api_key/base_url
+      //（用户可能改过），然后 re-fetch provider 列表刷新 UI。
+      // ADR 0003 Stage 4 fix：修复了之前的「扫描后重复 add」报错。
+      if (pickerScanTempId) {
+        // provider 已在 scan 时 add，直接 update（更新可能改过的 key/url）
+        await api.providers.update({
+          id: finalId,
+          base_url: pickerBaseUrl.trim(),
+          api_key: pickerApiKey,
+        } as UpdateProvider);
+        // 重新拉列表以拿到最新 entry（含 label 等）
+        const list = await api.providers.list();
+        setProviders(list);
+        setPickerScanTempId(null);
+        setPickerOpen(false);
+        return;
+      }
+      // Fallback：pickerScanTempId 为 null（用户直接点保存，没扫过模型）
       const family =
         pickerKind === "openai_compat"
           ? "openai"
@@ -381,8 +453,70 @@ export default function SettingsPage({
     try {
       await api.providers.remove(id);
       setProviders((prev) => prev.filter((p) => p.id !== id));
+      // ADR 0003：如果删除嘅系 default provider，清 default state
+      // （保持 uninitialized 显式状态——Q3 决定避免 silent 切换）
+      if (id === defaultProviderId) {
+        setDefaultProviderId(null);
+        setDefaultModelId(null);
+      }
     } catch (e) {
       console.error("[providers] remove failed:", e);
+    }
+  };
+
+  // ADR 0003 Stage 2 cleanup：preset 路径保存后，若 default 未初始化
+  // 自动 set_default 到新选定嘅 model（初始化语义）；已有 default
+  // 时唔动——保持 user 显式控制。
+  const maybeInitDefaultFromPreset = async (
+    providerId: string,
+    modelId: string
+  ) => {
+    if (!modelId.trim()) return;
+    if (defaultProviderId) return; // 已有 default，唔覆盖
+    try {
+      await api.ai.setDefault(providerId, modelId);
+      setDefaultProviderId(providerId);
+      setDefaultModelId(modelId);
+    } catch (e) {
+      console.error("[default] preset init failed:", e);
+    }
+  };
+
+  // ADR 0003 Stage 3：副官「设为默认」交互——打开 dialog 实时拉
+  // list_models 让用户选 model，写入 NovaConfig default 字段。
+  const openDefaultPicker = async (providerId: string) => {
+    setDefaultPickerProviderId(providerId);
+    setDefaultPickerOpen(true);
+    setDefaultPickerModels([]);
+    setDefaultPickerModelsLoading(true);
+    setDefaultPickerError("");
+    try {
+      const models = await api.providers.listModels(providerId);
+      setDefaultPickerModels(models);
+      if (models.length === 0) {
+        setDefaultPickerError("未拉到任何模型——请检查供应商状态");
+      }
+    } catch (e) {
+      setDefaultPickerError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDefaultPickerModelsLoading(false);
+    }
+  };
+
+  const submitDefaultPicker = async (modelId: string) => {
+    if (!defaultPickerProviderId) return;
+    setDefaultPickerSubmitting(true);
+    setDefaultPickerError("");
+    try {
+      await api.ai.setDefault(defaultPickerProviderId, modelId);
+      setDefaultProviderId(defaultPickerProviderId);
+      setDefaultModelId(modelId);
+      setDefaultPickerOpen(false);
+      setDefaultPickerProviderId(null);
+    } catch (e) {
+      setDefaultPickerError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDefaultPickerSubmitting(false);
     }
   };
 
@@ -489,12 +623,13 @@ export default function SettingsPage({
                 borderBottom: `1px solid ${t.border}`,
               }}
             >
-              {/* Status ring — every listed provider is at minimum
-                  "active" (has a configured secret in ~/.nova/config.json).
-                  The `locked` state belongs to whichever provider the
-                  AI 副官 is currently bound to; that decision lives in
-                  AIChatPanel so we just render "active" here. */}
-              <OrbitRing status="active" size={10} sx={{ ml: 0.5 }} />
+              {/* Status ring — `locked` 表示当前 default provider（ADR 0003 §3.7），
+                  `active` 表示有配置但非 default，`inactive` 留作未来扩展。 */}
+              <OrbitRing
+                status={p.id === defaultProviderId ? "locked" : "active"}
+                size={10}
+                sx={{ ml: 0.5 }}
+              />
               <Typography sx={{ fontWeight: 500, color: t.star, fontSize: "0.95rem" }}>
                 {p.label}
               </Typography>
@@ -509,6 +644,19 @@ export default function SettingsPage({
               >
                 {p.id}
               </Typography>
+              {p.id === defaultProviderId && (
+                <Chip
+                  label="副官默认"
+                  size="small"
+                  sx={{
+                    height: 18,
+                    fontSize: "0.65rem",
+                    bgcolor: t.novaGlow,
+                    color: t.nova,
+                    border: `1px solid ${t.nova}`,
+                  }}
+                />
+              )}
               <Box sx={{ flex: 1 }} />
               <Typography
                 variant="caption"
@@ -520,12 +668,31 @@ export default function SettingsPage({
               >
                 {p.base_url}
               </Typography>
-              <Typography
-                variant="caption"
-                sx={{ color: t.star, fontFamily: FONT.mono }}
-              >
-                {p.model || "(未选模型)"}
-              </Typography>
+              {defaultModelId && p.id === defaultProviderId ? (
+                // 当前默认 provider：模型 chip 可点击改模型
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: t.nova,
+                    fontFamily: FONT.mono,
+                    cursor: "pointer",
+                    "&:hover": { textDecoration: "underline" },
+                  }}
+                  title="点击改模型"
+                  onClick={() => openDefaultPicker(p.id)}
+                >
+                  {defaultModelId}
+                </Typography>
+              ) : (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => openDefaultPicker(p.id)}
+                  sx={{ fontSize: "0.7rem" }}
+                >
+                  设为默认
+                </Button>
+              )}
               {p.source === "user" && (
                 <IconButton
                   size="small"
@@ -814,7 +981,22 @@ export default function SettingsPage({
           })()}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
-          <Button onClick={() => setPickerOpen(false)} disabled={pickerSubmitting}>
+          <Button
+            onClick={async () => {
+              // 回滚「扫描频段」期间临时创建的 user provider
+              if (pickerScanTempId) {
+                try {
+                  await api.providers.remove(pickerScanTempId);
+                  setProviders((prev) => prev.filter((p) => p.id !== pickerScanTempId));
+                } catch {
+                  // 回滚失败不影响取消
+                }
+                setPickerScanTempId(null);
+              }
+              setPickerOpen(false);
+            }}
+            disabled={pickerSubmitting}
+          >
             取消
           </Button>
           <Button
@@ -832,6 +1014,77 @@ export default function SettingsPage({
             }
           >
             {pickerSubmitting ? "锁定中…" : "锁定"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ADR 0003 §3.7：副官「设为默认」对话框。点 row 嘅「设为默认」
+          按钮后弹 dialog，实时拉 list_models 让用户选 model，写入
+          NovaConfig default 字段。 */}
+      <Dialog
+        open={defaultPickerOpen}
+        onClose={() => {
+          if (!defaultPickerSubmitting) {
+            setDefaultPickerOpen(false);
+            setDefaultPickerProviderId(null);
+          }
+        }}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontFamily: FONT.display, fontWeight: 400 }}>
+          设副官默认
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="caption" sx={{ color: t.starFaint, display: "block", mb: 1.5 }}>
+            从 <strong>{defaultPickerProviderId}</strong> 拉取模型列表，选择一个设为副官默认大脑。
+          </Typography>
+          {defaultPickerModelsLoading && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, py: 2 }}>
+              <CircularProgress size={14} sx={{ color: t.nova }} />
+              <Typography variant="caption" sx={{ color: t.starFaint }}>
+                正在从供应商拉取模型…
+              </Typography>
+            </Box>
+          )}
+          {defaultPickerError && (
+            <Typography variant="caption" sx={{ color: "error.main", display: "block", mb: 1 }}>
+              {defaultPickerError}
+            </Typography>
+          )}
+          {!defaultPickerModelsLoading && defaultPickerModels.length === 0 && !defaultPickerError && (
+            <Typography variant="caption" sx={{ color: t.starFaint }}>
+              暂无可用模型
+            </Typography>
+          )}
+          <List dense disablePadding>
+            {defaultPickerModels.map((m) => (
+              <ListItemButton
+                key={m}
+                disabled={defaultPickerSubmitting}
+                onClick={() => submitDefaultPicker(m)}
+              >
+                <ListItemText
+                  primary={m}
+                  secondary={
+                    m === defaultModelId && defaultPickerProviderId === defaultProviderId
+                      ? "当前默认"
+                      : undefined
+                  }
+                />
+              </ListItemButton>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button
+            onClick={() => {
+              setDefaultPickerOpen(false);
+              setDefaultPickerProviderId(null);
+            }}
+            disabled={defaultPickerSubmitting}
+          >
+            取消
           </Button>
         </DialogActions>
       </Dialog>

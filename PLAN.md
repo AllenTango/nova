@@ -566,6 +566,106 @@ nova/
 
 ## 11. v1.x Changelog
 
+### 2026-06-16：ADR 0003 Stage 4 fix（Settings picker + IPC 根因 + State batching）
+
+- **streaming panic 根因找到了**：`OpenAIClient` 用 `reqwest::blocking::Client::send()`，阻塞 client 内部起独立 tokio runtime，在 Tauri 的 multi-thread tokio runtime 的 `spawn_blocking` thread 里调 `response.bytes()` 等 blocking Read API 时，body drop 触发了 "Cannot drop a runtime in a context where blocking is not allowed" panic。修复：完全切到 async `reqwest::Client` + `Handle::block_on`，SSE 解析改用 `bytes_stream()` + 手动跨 chunk 行缓冲（`leftover`），全部在已有 tokio runtime 里跑——彻底避开 blocking runtime 冲突。
+- **副官无法对话的根因找到了**：capabilities 里有无效 permission 标识符（`core:allow-invoke` / `core:allow-send-event` / `core:allow-listen`），导致整个 capabilities 加载失败，所有 IPC invoke 被 deny。Tauri IPC 桥 fallback 到 HTTP (`http://ipc.localhost/ai_chat`)，后者 404 → 前端 `invoke()` 抛错 → 副官没响应。修复：capabilities 只保留有效 permission（`core:default` + `core:event:default`）。
+- **模型懒验证移出 startup**：之前在 `migrate_default_state` 里用 `Handle::current().block_on()` 做网络验证，在 Tauri setup 同步 context 里 panic（no reactor running）。修复：懒验证移到 `ai_chat` 首次调用时做；但由于架构过于复杂（nested runtime + blocking），最终方案是直接去掉懒验证——`migrate_default_state` 只做 field 迁移。
+- **React State batching 导致 `handleSubmit` 收到空字符串**：`handleSend` 里先 `setInput("")` 清空状态，然后调 `handleSubmit(e)`，但 `handleSubmit` 里的 `input` 闭包还是旧值。修复：`handleSubmit(text: string, e?)` 改为接受显式文本参数，`handleSend` 直接把 `input` 传入。
+- **Settings「扫描频段」不走 `api.ai.listModels` 了**（之前这个路径的 `api_key`/`base_url` override 被 Rust `resolve_credentials` 完全忽略）。修复：`fetchPickerModels` 先 `add`/`update` provider（persist api_key），然后用 `api.providers.listModels(providerId)` 正确拉模型列表。
+- **`submitPicker` 在扫描后不再重复 add**：用户扫完点保存，`api.providers.add` 会因为 ID 已存在报错。修复：扫描后 `submitPicker` 识别 `pickerScanTempId` 状态，改走 `api.providers.update`。
+- **「设为默认」按钮现在对所有 provider 显示**（包括当前默认的）：之前对默认 provider 隐藏按钮，用户无法在 Settings 里改默认 provider 的模型。修复：所有 provider 行都显示按钮，点击弹出模型选择器。
+- **`migrate_default_state` 幂等清理**：每次启动都无条件清理 `entry.model` 字段，防止旧 migration 残留导致不一致。
+- **加了 `[DEBUG ai_chat]` stderr logs**：下次聊天失败时 stderr 会显示 `provider=`、`base_url=`、`model=`、`api_key_set=` 等关键信息。
+
+### 2026-06-16：ADR 0003 Stage 3 fix v2（get_default_model snake_case + Stage 2 字段清理）
+
+- **Bug**：用户报告 (1) 设置默认模型后副官 top bar 仍显示「未设置供应商与模型」；(2) `/switch` 与 Settings UI 设默认都失效；(3) config.json 仍有 `model` / `models` / `preset_overrides.model` 冗余字段。
+- **Root cause**：
+  - **(1) 致命 Bug A**：`get_default_model` Rust struct `DefaultModelState { provider_id, model_id }` 默认 serialize **snake_case**（Tauri 2 invoke return value 唔会自动 camelCase 转换，只 args 转换），但 `client.ts` 接口期望 `providerId` / `modelId`（camelCase）。wire shape mismatch → JS 端 `d.providerId` 永远 undefined → `setDefaultProviderId(null)` → UI 永远「未设置」。
+  - **(2) ADR Stage 2 漏做**：Stage 1+2 之前落地时只改咗 `resolve_credentials` 同 `add` 路径初始化 default，但**冇实际移除冗余字段**——`ProviderEntry.model` / `ModelEntry.is_default` / `UpdateProvider.model` / `PresetOverride.model` 仍写入 config.json。
+- **修复**：
+  - **client.ts + Settings.tsx + AIChatPanel.tsx**：wire format 改 snake_case（`provider_id` / `model_id`），同 codebase 一致
+  - **`ModelEntry.is_default` 字段移除**——models 不持久化，无赋值场景
+  - **`PresetOverride.model` 字段移除**——被 `NovaConfig.default_model_id` 取代（ADR 0003 §6.3）
+  - **`ProviderEntry.model` 加 `#[serde(default, skip_serializing_if = "String::is_empty")]`**——空字符串时唔写入 JSON；`add` 路径不再写入
+  - **`ProviderEntry.models` 加 `#[serde(default, skip_serializing_if = "Vec::is_empty")]`**——空 vec 时唔写入 JSON（models 不持久化）
+  - **`UpdateProvider.model` 字段移除**——update 不做 set_default（避免 silent override 当前 default）
+  - **`make_preset_entry` 移除 preset_overrides.model 注入逻辑**——只读 base_url
+  - **`providers::update` 移除 patch.model 处理**——base_url / api_key / label 仍可更新
+  - **`migrate_default_state` 启动期清空旧 entry.model 字段**——一次性迁移，旧 config 嘅 `model: "MiniMax-M2.7"` 写到 default_*_id 后清空 entry.model
+  - **`commands::settings::get_default_target` 重写**——直接读 `NovaConfig.default_*_id`，唔再依赖 entry.models[].is_default
+  - **`http_server::resolve_target` 重写**——同上 + body_json.provider_id inline override 保留向后兼容
+  - **Settings UI 新增 `maybeInitDefaultFromPreset` 辅助函数**——preset 路径保存后若 default 未初始化，自动 set_default（与 `add` 路径初始化语义对齐）
+
+- **效果**：
+  - `setDefault` 写入后 UI 立即同步（snake_case wire format 修复）
+  - 新 config.json 不再写 `model` / `models` / `preset_overrides.model` 冗余字段；旧 config 启动期 migration 自动清空
+  - 用户体验：副官默认模型设置后立刻生效，top bar 正确显示
+
+### 2026-06-16：ADR 0003 Stage 3 fix（AIChatPanel default 同步 + 移除 inline override）
+
+- **Bug**：用户报告副官 top bar 显示 provider 嘅 model（唔系 default 嘅 model），且对话无响应。
+- **Root cause**：(1) `AIChatPanel` 嘅 `selectedId` 从未同 `NovaConfig.default_provider_id` 同步——`activeOption` 来自用户在 UI 拣嘅 supplier（独立 state），top bar 渲染用 `activeOption.{id,model}`，同 default 字段完全脱钩。(2) `useLocalAI` 传入 `overrides: { model: activeOption.model, ... }`，`chat.rs::resolve_credentials` 入面 `.unwrap_or(default_pid/mid)` 会被 inline 覆盖——用户喺 `/switch` 切咗新 model 之后 default 已更新，但 `activeOption.model` 仲系旧 entry 嘅 model 字段，inline override 把新 default 覆盖返去旧值，导致 chat 用旧 model 调上游可能 404 或 silent override 默认。
+- **修复**：
+  - `AIChatPanel` 新增 `defaultProviderId` / `defaultModelId` state + `refreshDefault` 回调（hydration 时 + `/switch` pick_model 后调用）
+  - `useLocalAI` **不传 overrides**——让 Rust 完全走 default 路径
+  - Top bar 渲染 `defaultProviderId / defaultModelId`，未设置时显示「未设置默认模型（输入 /switch 选取或去 Settings）」提示
+  - 删除 `activeOption` useMemo（top bar 已不依赖，仅 `/switch` pick_provider 用 `options` map）
+- **效果**：default 字段真正成为 chat 嘅唯一权威来源；top bar 显示同 chat 实际行为一致；`/switch` 切换后 UI 立即同步。
+
+### 2026-06-16：ADR 0003 Stage 3 落地（pick-then-fetch-then-set UX）
+
+- **ADR**：[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md) §3.6 + §3.7
+- **改动**：
+  - `client.ts`：暴露 `api.ai.setDefault(providerId, modelId)` + `api.ai.getDefault()` API
+  - 新增 `get_default_model` Tauri command（settings.rs） + `DefaultModelState` wire type
+  - `AIChatPanel.tsx`：`/switch` 命令升级为两段式状态机（`closed` → `pick_provider` → `pick_model` → 关闭），pick_model 阶段实时调 `api.providers.listModels(providerId)` 拉候选，用户选 model 后调 `setDefault` 写入 default
+  - `Settings.tsx`：provider row 渲染 default chip（如果 `p.id === default_provider_id`）+ 「设为默认」按钮（仅当非 default 时显示）；新增「设副官默认」Dialog——点 row 按钮触发 fetch list_models + 选 model + 调 `setDefault`；删除 default provider 时清 default state（保持 uninitialized 显式状态——Q3 决定避免 silent 切换）
+  - `Settings.tsx`：导入 MUI `List` / `ListItemButton` / `ListItemText`
+- **效果**：副官 `/switch` UX 完整（pick provider → fetch → pick model → set default）；Settings UI 列表显示 default chip + 提供 set default 入口。两端共享 `set_default_model` Tauri command，行为一致。
+- **回退**：纯 UI 回退（Stage 3）。`/switch` 回到 broken UX（pick_provider 后冇效果），但 chat 仍 work（Stage 2 已修）。
+
+### 2026-06-16：ADR 0003 Stage 1+2 落地（default-provider schema + resolve-credentials via default）
+
+- **ADR**：[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md)
+- **改动**：
+  - `NovaConfig` 加 `default_provider_id: Option<String>` + `default_model_id: Option<String>` 字段（`#[serde(default)]` 兜底旧 config.json）
+  - 新增 `nova_config::migrate_default_state` 函数：启动期幂等迁移旧 `ProviderEntry.model` / `preset_overrides[family].model` 到新字段
+  - 新增 `set_default_model` Tauri command（ADR 0003 §3.5）：只验证 provider 存在，model 验证推迟到 chat fallback
+  - `chat.rs::resolve_credentials` 重写（ADR 0003 §3.2）：直读 default 字段，不再 ad-hoc 3-step；不再本地验证 model 是否在 entry.models（models 不持久化，避免 false negative）
+  - `providers::add` 路径：default 未初始化时自动用新 entry 嘅 model 初始化；default 已存在时唔动（再次添加只验证服务，不 silent override）
+  - `lib.rs`：启动期调用 `migrate_default_state`（失败 eprintln 不阻塞 app）；`set_default_model` 注册到 `invoke_handler!`
+- **效果**：副官 chat 现在直读 `NovaConfig.default_*_id` 字段，不再依赖 entry 嘅 stale `model` / `models[].is_default`。Stage 3 (`/switch` UX 升级) + Stage 4 (fallback) 系增量 UX，唔阻塞 ship。
+- **回退**：Stage 1 仅 schema 改动，旧 `resolve_credentials` 仍 fallback 到 ad-hoc 逻辑（但功能等价）。Stage 2 核心行为变更，回退后 fallback 到 Stage 1 嘅 boot-time migration。
+
+### 2026-06-16：ADR 0003 Default-Model 显式状态管理（草稿）
+
+- **ADR 草案**：[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md)
+- **背景**：当前「默认模型」系隐式概念，由 `ProviderEntry.models[].is_default` 推断，事实状态散布于三个字段，造成 preset model 唔持久化、user entry `models: []` 永远空、`/switch` UX broken、Settings UI 冇 set default 交互、default 失效冇 fallback 等一系列问题。**修订（2026-06-16 v2）**：持久化 supplier 嘅 model 列表本身系反模式——供应商随时变动 model，本地缓存会 stale。改为 `ProviderEntry.models` 运行时字段（`#[serde(skip)]`），每次需要时实时调 `list_models` API 拉取。
+- **决策**：NovaConfig 加 `default_provider_id` + `default_model_id` 显式字段；`resolve_credentials` 改为直读呢两个字段（不做 model 本地验证，404 由 fallback 兜底）；`set_default_model` 作为单一权威入口；三段式状态机 `uninitialized` → `initialized` → `stale`；启动期 migration 兜底旧 config.json。
+- **字段清理**：Stage 1 保留 `ProviderEntry.model` + `ModelEntry.is_default` 向后兼容（旧 config.json migration 需要）；Stage 2 彻底移除。`UpdateProvider.model` Stage 1 保留（frontend picker 仍传），Stage 3 移除。
+- **实施计划**：4 个独立 stage commit（schema/migration → resolve 重构 → UX 升级 → fallback），按依赖顺序，每个 stage 独立 ship + 可回退。
+- **状态**：🟡 Draft，已采纳「model 列表不持久化」原则（v2），待拣实施范围。当前 2026-06-16 加嘅 `preset_overrides.model` 字段系临时过渡，Stage 1 之后废弃。
+
+### 2026-06-16：副官 chat 真正未处理文本消息（preset model 未持久化）
+
+- **Bug**：用 OpenAI / Anthropic preset（`mode=preset`）配置嘅副官链路，发送消息时无反应；OpenAI 兼容 / Anthropic 兼容 / Ollama user path 正常。
+- **Root cause**：`providers::update` 嘅 preset 分支**只写 secret 去 `~/.nova/config.json::provider_secrets`，`model` 字段只 set 喺 in-memory 变量，完全冇落盘**。下次 `list_all` 调 `make_preset_entry("openai")` 构造 entry，`model = ""`、`models = Vec::new()`。链路：`AIChatPanel` 拎到 `activeOption.model = ""` → 传 `overrides: { model: "" }` 畀 Rust → `resolve_credentials` step 2 `!entry.model.is_empty()` fail + step 3 inline override model 被 filter 掉 → `target.model.trim().is_empty()` → `Err("no default model configured — open Settings and mark a model as default")` → invoke reject。错误文案讲「未配默认 model」误导 user（实际配咗但冇 persist）。
+- **修复**：`NovaConfig` 加 `preset_overrides: BTreeMap<String, PresetOverride>` 字段（preset id → `{model, base_url}`）。`update` 嘅 preset 路径写入 `preset_overrides`；`make_preset_entry` 读呢个 map 把 model 注入到 `entry.models`（`is_default=true` 形式）—— `resolve_credentials` step 1 嘅 `models.iter().any(|m| m.is_default)` 搵默认路径直接生效。User path（`add_provider` 走 `providers` 数组）行为不变。Base URL 也 persist，forward-compat Ollama 嘅 `baseUrlEditable: true` preset 场景。
+
+### 2026-06-16：http_server 启动 panic 修复
+
+- **Bug**：Windows 启动 Nova 时后台日志 panic：`tokio-rt-worker panicked at src\http_server\mod.rs:465:63: called Result::unwrap() on an Err value: Os { code: 10013, kind: PermissionDenied }`。
+- **Root cause**：(1) `tokio::net::TcpListener::bind("0.0.0.0:{port}")` 喺 Windows 上触发 `WSAEACCES` (10013)——`0.0.0.0` 意味着 listen 所有 interface，Windows Defender Firewall 喺 bind 阶段就可能拒绝。但 ADR 0002 §4 已经明文讲 server 用途系「外部客户端走 `localhost`」，根本唔需要 0.0.0.0。(2) `unwrap()` 让任何 socket 错误（端口占用、Hyper-V 动态端口保留）直接 panic tokio worker，外部根本睇唔到真正原因。
+- **修复**：`0.0.0.0` → `127.0.0.1`（loopback only，符合设计意图）；`bind`/`serve` 嘅 `unwrap()` 改为 eprintln + 优雅 return，唔再 panic tokio worker。Bind 失败时控制台打印 `kind()` 方便诊断（`PermissionDenied` vs `AddrInUse` 等）。
+
+### 2026-06-16：副官输入 state 同步修复
+
+- **Bug**：AIChatPanel 给「副官」发送消息时无反应，文本内容从未送至 Rust 端。
+- **Root cause**：`AIChatPanel` 与 `useLocalAI` hook 各持一份 `input` state。`TextField` `onChange` 只 set panel 自己嘅 state；hook 嘅 `handleSubmit` 只读 hook 自己嘅 input（永远空字符串），`sendMessage` guard `if (!text.trim()) return;` 直接 return，invoke 从未触发。系 ADR 0002 改造 IPC 流式时遗留嘅 state 同步问题——之前 hook 可能直接收 `text`，改造后接管 input 但 UI 端冇人 sync。
+- **修复**：`useLocalAI` 暴露 `setInput`；`AIChatPanel` `onChange` 同时设两份 state；`handleSend` 提交后清空两份 state。最小改动，未引入新抽象。
+
 ### 2026-06-15：命题 A 落地（chat IPC 流式）
 
 - **架构**：Nova webview ↔ Rust chat 通讯从 HTTP fetch + SSE wire 解析改为 **Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式**。详见 [ADR 0002](docs/architecture-decisions/0002-chat-ipc-streaming.md)。

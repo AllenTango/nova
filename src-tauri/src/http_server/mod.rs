@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::db::Database;
+use crate::nova_config;
 use crate::provider::{ChatMessage, ChatRequest, ProviderFactory};
 use crate::providers;
 
@@ -63,18 +64,30 @@ async fn resolve_target(
         return Err("no default target configured (Tauri app handle unavailable)".into());
     };
 
+    // ADR 0003：default 嘅权威来源系 `NovaConfig.default_*_id`，
+    // 唔再依赖 entry.models[].is_default（Stage 2 cleanup 已移除）。
+    let config = nova_config::read_config(app);
+    let (default_pid, default_mid) = match (
+        config.default_provider_id.as_deref(),
+        config.default_model_id.as_deref(),
+    ) {
+        (Some(p), Some(m)) => (p, m),
+        _ => return Err("no default model configured".into()),
+    };
+
+    // body_json 嘅 `provider_id` 字段仍可作为 inline override
+    // （HTTP 外部客户端可能显式传）。
+    let inline_pid = body_json
+        .get("provider_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+
     let list = providers::list_all(app)?;
-    if let Some(entry) = list.iter().find(|p| {
-        p.models.iter().any(|m| m.is_default)
-    }) {
+    let entry_pid = inline_pid.unwrap_or(default_pid);
+    if let Some(entry) = list.iter().find(|p| p.id == entry_pid) {
         out.provider = entry.family.clone();
         out.base_url = entry.base_url.clone();
-        out.model = entry
-            .models
-            .iter()
-            .find(|m| m.is_default)
-            .map(|m| m.id.clone())
-            .unwrap_or_default();
+        out.model = default_mid.to_string();
         if let Ok(Some(key)) = providers::resolve_api_key(app, &entry.id) {
             out.api_key = key;
         }
@@ -461,8 +474,26 @@ pub async fn start_http_server(
         .route("/v1/chat/completions", post(chat_completions_handler))
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    // Loopback-only：ADR 0002 §4 明文规定 server 嘅用途系
+    // 「外部 AI 客户端走 localhost」，根本唔需要 0.0.0.0。
+    // 绑 0.0.0.0 喺 Windows 上会被防火墙拦截（错误码 WSAEACCES
+    // / 10013），改成 127.0.0.1 同设计意图一致，同时避开权限坑。
+    let addr = format!("127.0.0.1:{}", port);
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // 端口占用 / 权限拦截 / Hyper-V 动态端口保留都会到呢度。
+            // 之前直接 unwrap panic tokio worker，外部根本睇唔到
+            // 实际原因；改成 eprintln 后调用方可以根据日志判断。
+            eprintln!(
+                "[HTTP server] failed to bind {}: {} (kind={:?})",
+                addr, e, e.kind()
+            );
+            return;
+        }
+    };
     println!("[HTTP server] Listening on http://{}", addr);
-    axum::serve(listener, app_router).await.unwrap();
+    if let Err(e) = axum::serve(listener, app_router).await {
+        eprintln!("[HTTP server] serve error: {}", e);
+    }
 }

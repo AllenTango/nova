@@ -16,7 +16,7 @@
 //! Settings 页可以增删用户 provider；chat 切换器可以从两个源
 //! 里任选。
 
-use crate::nova_config;
+use crate::nova_config::{self, PresetOverride};
 use crate::provider::config::get_provider_config;
 
 // 再导出给 command handler 和其他模块用的类型。
@@ -25,8 +25,20 @@ pub use crate::nova_config::{
     UpdateProvider,
 };
 
-fn make_preset_entry(family_id: &str) -> Option<ProviderEntry> {
+fn make_preset_entry(
+    family_id: &str,
+    ov: Option<&PresetOverride>,
+) -> Option<ProviderEntry> {
     let config = get_provider_config(family_id)?;
+    // base_url 优先用 user 喺 Settings UI 改过嘅值，否则用 registry 嘅默认。
+    let base_url = ov
+        .and_then(|o| o.base_url.as_deref())
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| config.default_base_url.to_string());
+    // ADR 0003 Stage 2 cleanup：preset 路径唔再写入 `model` / `models`
+    // 字段——default 嘅权威来源系 `NovaConfig.default_*_id`，
+    // entry 本体只承载 base_url（user override）。
     Some(ProviderEntry {
         id: config.id.to_string(),
         label: config.name.to_string(),
@@ -34,7 +46,7 @@ fn make_preset_entry(family_id: &str) -> Option<ProviderEntry> {
         base_url_editable: false,
         api_key_required: true,
         kind: FamilyKind::Preset,
-        base_url: config.default_base_url.to_string(),
+        base_url,
         model: String::new(),
         models: Vec::new(),
         source: ProviderSource::Preset,
@@ -49,10 +61,11 @@ fn make_preset_entry(family_id: &str) -> Option<ProviderEntry> {
 ///   2. 用户添加的条目——`OpenaiCompat` / `AnthropicCompat`。
 pub fn list_all(app: &tauri::AppHandle) -> Result<Vec<ProviderEntry>, String> {
     let secrets = nova_config::read_secrets(app);
+    let preset_overrides = nova_config::read_preset_overrides(app);
 
     let presets: Vec<ProviderEntry> = PRESET_FAMILIES
         .iter()
-        .filter_map(|f| make_preset_entry(f))
+        .filter_map(|f| make_preset_entry(f, preset_overrides.get(*f)))
         .filter(|p| secrets.get(&p.id).is_some_and(|k| !k.is_empty()))
         .collect();
 
@@ -101,7 +114,10 @@ pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, St
         api_key_required: true,
         kind: new.kind.clone(),
         base_url: new.base_url.trim().to_string(),
-        model: new.model.trim().to_string(),
+        // ADR 0003 Stage 2 cleanup：`model` 字段不写入——default 嘅
+        // 权威来源系 NovaConfig.default_*_id，entry 唔重复存。
+        // 用户选定嘅 model 已经通过下方 set_default 逻辑写入顶层字段。
+        model: String::new(),
         models: Vec::new(),
         source: ProviderSource::User,
     };
@@ -110,6 +126,16 @@ pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, St
 
     if !new.api_key.is_empty() {
         nova_config::write_secret(app, &id, &new.api_key)?;
+    }
+
+    // ADR 0003 Stage 2：若 default 未初始化，自动用新 entry 嘅
+    // model 初始化 default。**再次添加**（default 已存在）→ 唔动，
+    // 避免 silent override 当前 default 状态。
+    let mut config = nova_config::read_config(app);
+    if config.default_provider_id.is_none() && !new.model.trim().is_empty() {
+        config.default_provider_id = Some(id.clone());
+        config.default_model_id = Some(new.model.trim().to_string());
+        nova_config::write_config(app, &config)?;
     }
 
     Ok(entry)
@@ -128,9 +154,9 @@ pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderE
         if let Some(base_url) = patch.base_url {
             entry.base_url = base_url;
         }
-        if let Some(model) = patch.model {
-            entry.model = model;
-        }
+        // ADR 0003 Stage 2 cleanup：移除 patch.model 处理——update
+        // 路径不做 set_default（避免 silent override 当前 default）；
+        // 改 default 走独立 `set_default_model` command。
         let updated = entry.clone();
         nova_config::write_providers(app, &providers)?;
 
@@ -147,10 +173,22 @@ pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderE
     if !PRESET_FAMILIES.contains(&id.as_str()) {
         return Err(format!("provider not found: {id}"));
     }
-    let mut preset = make_preset_entry(&id).ok_or_else(|| format!("invalid preset: {id}"))?;
-    if let Some(model) = patch.model {
-        preset.model = model;
+    // Preset 路径：entry 唔写进 `providers` 数组，base_url 持久化
+    // 去 `preset_overrides` map。secret 仍然写去 `provider_secrets`。
+    // `make_preset_entry` 读呢两个 map 重新组装 entry 返俾前端。
+    let existing = nova_config::read_preset_overrides(app);
+    let mut ov = existing.get(&id).cloned().unwrap_or_default();
+    // ADR 0003 Stage 2 cleanup：移除 patch.model 处理——preset 路径
+    // 嘅 model 写入亦改走独立 `set_default_model` command。
+    if let Some(base_url) = patch.base_url {
+        if base_url.trim().is_empty() {
+            ov.base_url = None;
+        } else {
+            ov.base_url = Some(base_url);
+        }
     }
+    nova_config::write_preset_override(app, &id, &ov)?;
+
     if let Some(api_key) = patch.api_key {
         if api_key.is_empty() {
             nova_config::clear_secret(app, &id)?;
@@ -158,7 +196,9 @@ pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderE
             nova_config::write_secret(app, &id, &api_key)?;
         }
     }
-    Ok(preset)
+
+    // 用最新 override 重新构造 entry 返俾前端。
+    make_preset_entry(&id, Some(&ov)).ok_or_else(|| format!("invalid preset: {id}"))
 }
 
 /// 删除一个用户 provider 及其密钥。
