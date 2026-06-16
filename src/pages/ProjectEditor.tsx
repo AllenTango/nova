@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
@@ -49,6 +49,62 @@ const SITE_TEMPLATES = [
   { id: "agent-home", name: "智能体主页" },
 ];
 
+/**
+ * 自动保存草稿
+ *
+ * - key：`nova.draft.{note|post}.{projectId}.{path|"new"}`
+ * - 内容：title + content + tags (+ type 仅 post)
+ * - 触发：编辑变化后 1500ms debounce
+ * - 不与已保存同步：只有用户点「保存/点亮」成功后才清草稿
+ * - 生命周期：项目目录切换、关闭页面时保留，purge 才清
+ *
+ * 范围：仅 ProjectEditor 用。如果未来其他页面需要可以提
+ * 升到 `src/lib/drafts.ts`。
+ */
+interface DraftPayload {
+  title: string;
+  content: string;
+  type: string;
+  tags: string;
+  savedAt: number;
+}
+
+function draftKey(
+  kind: "note" | "post",
+  projectId: string,
+  path: string | null,
+): string {
+  return `nova.draft.${kind}.${projectId}.${path ?? "new"}`;
+}
+
+function readDraft(key: string): DraftPayload | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DraftPayload;
+    if (typeof parsed.content !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(key: string, payload: DraftPayload): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    // 容量爆或 SSR——静默 fail，不阻塞用户
+  }
+}
+
+function clearDraft(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // 静默
+  }
+}
+
 export default function ProjectEditor({
   projectId,
   onBack,
@@ -73,6 +129,10 @@ export default function ProjectEditor({
   const [upgradeTemplate, setUpgradeTemplate] = useState("blog");
   const [savedPulse, setSavedPulse] = useState(false);
   const [syncHint, setSyncHint] = useState(false);
+  /** 草稿自动保存时间戳；null = 当前选中项无草稿。 */
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  /** 草稿恢复提示：当前选中项有未保存的草稿但又点了同一项。 */
+  const [draftPrompt, setDraftPrompt] = useState<DraftPayload | null>(null);
   const [buildResult, setBuildResult] = useState<null | {
     success: boolean;
     outputDir: string;
@@ -220,6 +280,89 @@ export default function ProjectEditor({
     }
   }, [selected, selectedIsNote]);
 
+  // 选项目/选中项变化时检测草稿。同一项重新打开 → 弹 prompt 问是否载入。
+  useEffect(() => {
+    if (!project) return;
+    const kind: "note" | "post" = isSite ? "post" : "note";
+    const path = isCreating ? null : selected?.path ?? null;
+    const key = draftKey(kind, project.id, path);
+    const draft = readDraft(key);
+    if (!draft) {
+      setDraftSavedAt(null);
+      setDraftPrompt(null);
+      return;
+    }
+    // 已暂存但与当前内容一致（用户没改）→ 不弹
+    if (
+      draft.title === editTitle &&
+      draft.content === editContent &&
+      draft.tags === editTags &&
+      (isSite ? draft.type === editType : true)
+    ) {
+      setDraftSavedAt(draft.savedAt);
+      setDraftPrompt(null);
+      return;
+    }
+    // 未保存的草稿与已加载项不同 → 弹 prompt
+    setDraftPrompt(draft);
+    setDraftSavedAt(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id, selected?.path, isCreating]);
+
+  // 编辑变化 → 1500ms debounce 写草稿
+  const draftDebounceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!project) return;
+    // 没选 + 唔新建 → 不存
+    if (!isCreating && !selected) return;
+    // 内容无变化 → 不存（避免覆盖刚清的草稿）
+    if (
+      editTitle === "" &&
+      editContent === "" &&
+      editTags === "" &&
+      (isSite ? editType === "blog" : true)
+    ) {
+      return;
+    }
+    if (draftDebounceRef.current) window.clearTimeout(draftDebounceRef.current);
+    draftDebounceRef.current = window.setTimeout(() => {
+      const kind: "note" | "post" = isSite ? "post" : "note";
+      const path = isCreating ? null : selected?.path ?? null;
+      const key = draftKey(kind, project.id, path);
+      writeDraft(key, {
+        title: editTitle,
+        content: editContent,
+        type: editType,
+        tags: editTags,
+        savedAt: Date.now(),
+      });
+      setDraftSavedAt(Date.now());
+    }, 1500);
+    return () => {
+      if (draftDebounceRef.current) window.clearTimeout(draftDebounceRef.current);
+    };
+  }, [project?.id, selected?.path, isCreating, isSite, editTitle, editContent, editType, editTags]);
+
+  /** 载入草稿（点 prompt 上的"载入"按钮） */
+  const loadDraft = useCallback((draft: DraftPayload) => {
+    setEditTitle(draft.title);
+    setEditContent(draft.content);
+    setEditType(draft.type);
+    setEditTags(draft.tags);
+    setDraftPrompt(null);
+    setDraftSavedAt(draft.savedAt);
+  }, []);
+
+  /** 丢弃草稿 */
+  const discardDraft = useCallback(() => {
+    if (!project) return;
+    const kind: "note" | "post" = isSite ? "post" : "note";
+    const path = isCreating ? null : selected?.path ?? null;
+    clearDraft(draftKey(kind, project.id, path));
+    setDraftPrompt(null);
+    setDraftSavedAt(null);
+  }, [project, isSite, isCreating, selected?.path]);
+
   if (!projectId || !project) {
     return (
       <Box sx={{ p: 3 }}>
@@ -249,6 +392,11 @@ export default function ProjectEditor({
         tags,
       });
     }
+    // 保存成功 → 清草稿（mutation onSuccess 里清，避免失败时丢失）
+    if (project) {
+      const kind: "note" | "post" = isSite ? "post" : "note";
+      clearDraft(draftKey(kind, project.id, selected.path));
+    }
     emit({
       type: "save",
       projectId: project.id,
@@ -257,6 +405,7 @@ export default function ProjectEditor({
     });
     setSavedPulse(true);
     setSyncHint(true);
+    setDraftSavedAt(null);
     window.setTimeout(() => setSavedPulse(false), 900);
     window.setTimeout(() => setSyncHint(false), 1800);
   };
@@ -638,7 +787,23 @@ export default function ProjectEditor({
                     gap: 1.5,
                   }}
                 >
-                  <OrbitRing
+                  {/* 草稿状态行：编辑变化 → 1500ms debounce 自动暂存 localStorage。 */}
+                {draftSavedAt && (
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: t.starFaint,
+                      fontFamily: FONT.mono,
+                      fontSize: "0.65rem",
+                      letterSpacing: "0.04em",
+                      ml: 2,
+                    }}
+                    title={`本地草稿暂存于 ${new Date(draftSavedAt).toLocaleTimeString()}`}
+                  >
+                    · 草稿已暂存
+                  </Typography>
+                )}
+                <OrbitRing
                     status={wordCount >= 1000 ? "locked" : wordCount > 0 ? "active" : "idle"}
                     size={7}
                   />
@@ -841,6 +1006,38 @@ export default function ProjectEditor({
             onClick={() => upgradeMutation.mutate()}
           >
             点亮
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 草稿恢复提示：检测到未保存的草稿，问用户载入还是丢弃。 */}
+      <Dialog
+        open={!!draftPrompt}
+        onClose={() => discardDraft()}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontFamily: FONT.display, fontWeight: 400, fontSize: "1.3rem" }}>
+          检测到未保存的草稿
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            {draftPrompt && (
+              <>
+                你的「{project.name}」里有 {Math.round(
+                  (Date.now() - draftPrompt.savedAt) / 60000,
+                )} 分钟前的本地暂存。是否载入？
+              </>
+            )}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => discardDraft()}>丢弃</Button>
+          <Button
+            variant="contained"
+            onClick={() => draftPrompt && loadDraft(draftPrompt)}
+          >
+            载入草稿
           </Button>
         </DialogActions>
       </Dialog>

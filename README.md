@@ -85,7 +85,9 @@ nova/
 ├── src-tauri/              # Rust 后端
 │   ├── nova_config.rs      # 统一配置读写 (~/.nova/config.json)
 │   ├── commands/
-│   │   ├── sites.rs        # 项目管理（note + site）
+│   │   ├── sites.rs        # 项目管理
+│   │   ├── notes.rs        # 纯笔记 CRUD
+│   │   ├── content.rs      # 站点内容 CRUD
 │   │   ├── chat.rs         # AI 对话 + 模型列表（v1.x：Tauri IPC + Channel<ChatEvent> 流式）
 │   │   ├── providers.rs    # 供应商 CRUD
 │   │   ├── settings.rs     # 端口设置

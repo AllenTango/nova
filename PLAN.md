@@ -532,7 +532,9 @@ nova/
 │   ├── main.rs
 │   ├── nova_config.rs     # 统一配置读写（~/.nova/config.json：ports / theme / providers / provider_secrets）
 │   ├── commands/
-│   │   ├── sites.rs        # 项目管理命令（note + site 合并）
+│   │   ├── sites.rs        # 项目管理命令
+│   │   ├── notes.rs        # 纯笔记 CRUD
+│   │   ├── content.rs      # 站点内容 CRUD
 │   │   ├── chat.rs         # AI 对话 + 模型列表（v1.x：Channel<ChatEvent> 流式）
 │   │   ├── providers.rs    # 供应商 CRUD 命令
 │   │   ├── settings.rs     # 端口设置命令
