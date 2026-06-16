@@ -1,16 +1,30 @@
+//! Ollama 本地家族嘅流式 chat。
+//!
+//! 协议：`POST {base}/api/chat` 携带 `"stream": true`，
+//! 响应 `Content-Type: application/x-ndjson`（**非**标准 SSE）：
+//! 每行一个完整 JSON 对象，无 `data:` 前缀。
+//!
+//! chunk 形状：
+//!   {"model":"...","message":{"role":"assistant","content":"..."},"done":false}
+//!   ...
+//!   {"model":"...","done":true,"total_duration":...}
+//!
+//! 终止判断：每行的 `done` 字段为 true。
+//!
+//! 4 家族中此为 Ollama 本地服务专用——Custom 家族（openai_compat）
+//! 嘅 Ollama 入口走 `OpenAIClient` 走 `http://localhost:11434/v1`
+//! 嘅 OpenAI 兼容层，与本 native Ollama transport 并存。
+//!
+//! 实现要点：
+//!   - NDJSON 必须 BufReader + read_line 逐行读，**不可**一次性
+//!     `response.text()`——Ollama 长输出场景下 chunk 边界会
+//!     lazy flush 导致 hang。
+//!   - 错误响应走 `response.text()` 一次性读（非流式）。
+
 use crate::provider::{ChatRequest, ChatResponse, LLMClient, StreamCallback};
 use reqwest::blocking::Client;
+use std::io::{BufRead, BufReader};
 
-/// 解析 Ollama 的 NDJSON 流（不是标准 SSE）。
-///
-/// 协议：`POST {base}/api/chat` 携带 `"stream": true`，
-/// 响应 `Content-Type: application/x-ndjson`，**每行一个完整 JSON 对象**
-/// （不是 `data: {...}` 前缀）。终止判断：每行的 `done` 字段为 true。
-///
-/// chunk 形状：
-///   {"model":"...","message":{"role":"assistant","content":"..."},"done":false}
-///   ...
-///   {"model":"...","done":true,"total_duration":...}
 fn stream_ollama_chat(
     http: &Client,
     url: &str,
@@ -20,6 +34,7 @@ fn stream_ollama_chat(
     let response = http
         .post(url)
         .header("Content-Type", "application/json")
+        .header("Accept", "application/x-ndjson")
         .json(&body)
         .send()
         .map_err(|e| format!("Ollama 请求失败：{}", e))?;
@@ -30,12 +45,21 @@ fn stream_ollama_chat(
         return Err(format!("Ollama 返回 {}：{}", status, text));
     }
 
-    let text = response.text().map_err(|e| e.to_string())?;
+    // NDJSON 逐行解析。每行一个 JSON 对象，无前缀。
+    let mut reader = BufReader::new(response);
+    let mut buf = String::new();
     let mut full_text = String::new();
     let mut model_name = String::new();
 
-    for line in text.lines() {
-        let line = line.trim();
+    loop {
+        buf.clear();
+        let n = reader
+            .read_line(&mut buf)
+            .map_err(|e| format!("Ollama NDJSON 读取失败：{}", e))?;
+        if n == 0 {
+            break; // 流结束
+        }
+        let line = buf.trim();
         if line.is_empty() {
             continue;
         }

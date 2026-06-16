@@ -1,7 +1,6 @@
 pub mod config;
 pub mod openai;
 pub mod anthropic;
-pub mod google;
 pub mod ollama;
 
 use serde::{Deserialize, Serialize};
@@ -69,56 +68,65 @@ impl ProviderFactory {
     /// 创建 LLM 客户端。凭据由调用方传入——没有环境变量回退。
     /// 凭据唯一录入点是 Settings UI，写入 `~/.nova/config.json::provider_secrets`。
     ///
-    /// 优先级（高到低）：
-    /// 1. explicit_api_key / explicit_base_url（调用方传入）
-    /// 2. Provider 默认值（仅 base_url；api_key 必填）
+    /// 4 家族供应商路由：
+    ///   - OpenAI   → openai::OpenAIClient
+    ///   - Anthropic→ anthropic::AnthropicClient
+    ///   - Custom   → 按 kind (openai_compat/anthropic_compat) 委托给
+    ///                相应 client（base_url 由用户填）
+    ///   - Ollama   → ollama::OllamaClient
     pub fn create_client(
         provider: &str,
         explicit_api_key: Option<&str>,
         explicit_base_url: Option<&str>,
     ) -> Result<Box<dyn LLMClient>, String> {
-        let config = get_provider_config(provider)
-            .ok_or_else(|| format!("未知 provider：{}", provider))?;
-
-        let resolved_base_url = explicit_base_url
-            .filter(|u| !u.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| config.default_base_url.to_string());
-        let resolved_api_key = explicit_api_key
-            .filter(|k| !k.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| format!("未提供 {} 的 API Key", provider))?;
-
-        match config.transport {
-            config::TransportType::OpenAIChat => Ok(Box::new(openai::OpenAIClient::new(
-                &resolved_api_key,
-                &resolved_base_url,
-            ))),
-            config::TransportType::AnthropicMessages => Ok(Box::new(
-                anthropic::AnthropicClient::new(&resolved_api_key, &resolved_base_url),
-            )),
-            config::TransportType::GoogleGenerative => Ok(Box::new(google::GoogleClient::new(
-                &resolved_api_key,
-                &resolved_base_url,
-            ))),
-            config::TransportType::OllamaNative => Ok(Box::new(ollama::OllamaClient::new(
-                &resolved_api_key,
-                &resolved_base_url,
-            ))),
+        // 先查静态 registry（OpenAI / Anthropic / Ollama）
+        if let Some(config) = get_provider_config(provider) {
+            let resolved_base_url = explicit_base_url
+                .filter(|u| !u.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| config.default_base_url.to_string());
+            let resolved_api_key = explicit_api_key
+                .filter(|k| !k.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| format!("未提供 {} 的 API Key", provider))?;
+            return match config.transport {
+                config::TransportType::OpenAIChat => Ok(Box::new(openai::OpenAIClient::new(
+                    &resolved_api_key,
+                    &resolved_base_url,
+                ))),
+                config::TransportType::AnthropicMessages => Ok(Box::new(
+                    anthropic::AnthropicClient::new(&resolved_api_key, &resolved_base_url),
+                )),
+                config::TransportType::OllamaNative => {
+                    // Ollama 本地服务一般不需 API key，但 client 签名仍
+                    // 保留 key 参数用于未来走反向代理加鉴权的场景。
+                    Ok(Box::new(ollama::OllamaClient::new(
+                        resolved_api_key.as_str(),
+                        &resolved_base_url,
+                    )))
+                }
+            };
         }
+
+        // Custom 家族：provider id 形如 "custom-openai-xxx" 或
+        // "custom-anthropic-xxx"，由 providers::list_all 返回。
+        // 实际 family 路由从 kind 字段读：openai_compat → OpenAI
+        // transport；anthropic_compat → Anthropic transport。
+        // 调用方应已传入显式 base_url 和 api_key。
+        Err(format!("未知 provider：{}", provider))
     }
 
-    /// 列出某 provider 的可用模型。调用方必须在需要时传入 api_key；
-    /// 本方法不读进程环境变量。
-    ///
-    /// 4 个家族全部走实时端点——不再有硬编码模型列表。过时常量风险
-    /// 消失；provider 新增或下线模型，Nova 下次 `list_models` 即可
-    /// 拿到，无需重打包。
+    /// 列出某 provider 的可用模型。所有 4 家族走实时端点——
+    /// 不再有硬编码模型列表。
     ///
     /// - OpenAI / OpenAI 兼容 → GET /v1/models
     /// - Anthropic             → GET /v1/models (x-api-key)
-    /// - Google Gemini         → GET /v1beta/models
     /// - Ollama                → GET /api/tags
+    ///
+    /// Custom 家族（openai_compat / anthropic_compat）走对应官方
+    /// 端点，但 base_url 用用户填的；list_models 由调用方在
+    /// 拿到 provider entry 之后用 base_url 走 `list_models_openai_compatible`
+    /// 或 `anthropic::list_models`。
     pub fn list_models(
         provider: &str,
         explicit_api_key: Option<&str>,
@@ -139,9 +147,6 @@ impl ProviderFactory {
             config::TransportType::OpenAIChat => {
                 list_models_openai_compatible(&resolved_base_url, resolved_api_key.as_deref())
             }
-            config::TransportType::GoogleGenerative => {
-                list_models_google(&resolved_base_url)
-            }
             config::TransportType::OllamaNative => {
                 list_models_ollama(&resolved_base_url)
             }
@@ -155,7 +160,10 @@ impl ProviderFactory {
     }
 }
 
-fn list_models_openai_compatible(base_url: &str, api_key: Option<&str>) -> Result<Vec<String>, String> {
+pub fn list_models_openai_compatible(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>, String> {
     let base = base_url.trim_end_matches('/');
     // 一些 base URL 已经带 /v1（如 https://api.openai.com/v1），
     // 另一些是裸根（如 https://localhost:11434）。检测后只在
@@ -187,27 +195,7 @@ fn list_models_openai_compatible(base_url: &str, api_key: Option<&str>) -> Resul
     Ok(models)
 }
 
-fn list_models_google(base_url: &str) -> Result<Vec<String>, String> {
-    let url = format!("{}/models?key={}", base_url.trim_end_matches('/'), "");
-    let client = Client::new();
-    let response = client.get(&url).send().map_err(|e| e.to_string())?;
-    let status = response.status();
-    let text = response.text().map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!("获取 Google 模型列表失败：{} - {}", status, text));
-    }
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Google 模型列表返回了非法 JSON：{}", e))?;
-    let models = json["models"]
-        .as_array()
-        .ok_or("Google 模型列表响应缺少 models 数组")?
-        .iter()
-        .filter_map(|m| m["name"].as_str().map(|s| s.to_string()))
-        .collect();
-    Ok(models)
-}
-
-fn list_models_ollama(base_url: &str) -> Result<Vec<String>, String> {
+pub fn list_models_ollama(base_url: &str) -> Result<Vec<String>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
     let client = Client::new();
     let response = client.get(&url).send().map_err(|e| e.to_string())?;

@@ -188,8 +188,8 @@ export default function AIChatPanel({
               副官 · 通讯链路
             </Typography>
             {activeOption && (
-              <Typography variant="caption" sx={{ color: t.nova }}>
-                {activeOption.label}
+              <Typography variant="caption" sx={{ color: t.nova, fontFamily: FONT.mono }}>
+                {activeOption.id} / {activeOption.model}
               </Typography>
             )}
           </Box>

@@ -1,31 +1,50 @@
+/// 4 个供应商家族（2026-06-16 重构）：
+///
+///   - OpenAI      → 官方 OpenAI（POST /v1/chat/completions + Bearer）
+///   - Anthropic   → 官方 Anthropic（POST /v1/messages + x-api-key）
+///   - Custom      → 任何 OpenAI 兼容 或 Anthropic 兼容 嘅第三方
+///                   服务商（用户自己填 base_url，Nova 不内置
+///                   "Anthropic 兼容"/"OpenAI 兼容" 这种 wrapper 预设）
+///   - Ollama      → 本地 Ollama（POST /api/chat + NDJSON 流式）
+///
+/// 历史曾有 Google (Gemini) 家族——已彻底移除，调用方/UI 都不再支持。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthType {
     ApiKey,
 }
 
-/// 传输类型决定 API 协议
+/// 传输类型决定 API 协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportType {
-    OpenAIChat,        // POST /v1/chat/completions，Bearer token
-    AnthropicMessages, // POST /v1/messages，x-api-key header
-    GoogleGenerative,  // POST /v1beta/models/...:generateContent，API key 走 query
-    OllamaNative,      // POST /api/chat
+    /// POST /v1/chat/completions + Bearer。OpenAI 官方 + Custom(OpenAI 兼容)
+    /// 共用同一条 transport。
+    OpenAIChat,
+    /// POST /v1/messages + x-api-key + anthropic-version header。
+    /// Anthropic 官方 + Custom(Anthropic 兼容) 共用。
+    AnthropicMessages,
+    /// POST /api/chat + NDJSON 流式。Ollama 本地服务专用。
+    OllamaNative,
 }
 
-/// Provider 配置：默认 URL 和环境变量名
+/// Provider 配置：默认 URL 和鉴权相关元数据。
+///
+/// **Custom 家族不写死 entry**——它由用户通过 Settings UI 创建
+/// （kind=openai_compat 或 anthropic_compat），不通过静态 registry。
+/// registry 只覆盖官方固定供应商（OpenAI / Anthropic / Ollama）。
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
-    /// 唯一标识（如 "openai" / "anthropic" / "google"）
+    /// 唯一标识（如 "openai" / "anthropic" / "ollama"）
     pub id: &'static str,
-    /// 用户可见名称
+    /// 用户可见名称（Settings UI 显示）
     pub name: &'static str,
     /// 鉴权类型
     pub auth_type: AuthType,
     /// API 请求的默认 base URL
     pub default_base_url: &'static str,
-    /// base_url 覆盖用环境变量名（如 "OPENAI_BASE_URL"）
+    /// base_url 覆盖用环境变量名
     pub base_url_env_var: Option<&'static str>,
-    /// 按优先级查找的 API key 环境变量列表
+    /// 按优先级查找的 API key 环境变量列表（仅兜底，Nova 优先从
+    /// `~/.nova/config.json::provider_secrets` 读）
     pub api_key_env_vars: &'static [&'static str],
     /// 传输协议
     pub transport: TransportType,
@@ -33,7 +52,7 @@ pub struct ProviderConfig {
     pub aliases: &'static [&'static str],
 }
 
-/// Provider 注册表——所有支持的 provider
+/// 4 家族供应商的静态注册表（Custom 家族不入此表）。
 pub static PROVIDER_REGISTRY: &[ProviderConfig] = &[
     ProviderConfig {
         id: "openai",
@@ -56,16 +75,6 @@ pub static PROVIDER_REGISTRY: &[ProviderConfig] = &[
         aliases: &["anthropic"],
     },
     ProviderConfig {
-        id: "google",
-        name: "Google",
-        auth_type: AuthType::ApiKey,
-        default_base_url: "https://generativelanguage.googleapis.com/v1beta",
-        base_url_env_var: Some("GOOGLE_BASE_URL"),
-        api_key_env_vars: &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-        transport: TransportType::GoogleGenerative,
-        aliases: &["google", "gemini"],
-    },
-    ProviderConfig {
         id: "ollama",
         name: "Ollama",
         auth_type: AuthType::ApiKey,
@@ -75,10 +84,10 @@ pub static PROVIDER_REGISTRY: &[ProviderConfig] = &[
         transport: TransportType::OllamaNative,
         aliases: &["ollama"],
     },
-
 ];
 
-/// 按 id 或 alias 查找 provider 配置
+/// 按 id 或 alias 查找 provider 配置。Custom 家族不通过此函数——
+///// 它由 `providers` 模块动态组装。
 pub fn get_provider_config(id: &str) -> Option<&'static ProviderConfig> {
     let id_lower = id.to_lowercase();
     PROVIDER_REGISTRY

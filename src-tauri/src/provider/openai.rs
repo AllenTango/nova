@@ -1,17 +1,32 @@
+//! OpenAI 家族 + OpenAI 兼容家族（Custom: openai_compat）嘅流式 chat。
+//!
+//! 协议：`POST {base_url}/chat/completions` 携带 `stream: true`，
+//! 响应为 `Content-Type: text/event-stream`，每条事件格式：
+//!
+//!   data: {"id":"...","choices":[{"delta":{"content":"..."},...}]}
+//!
+//! 终止标志：单独一行 `data: [DONE]`。
+//!
+//! 覆盖 4 家族中嘅：
+//!   - OpenAI（官方 api.openai.com）
+//!   - Custom（kind=openai_compat，base_url 由用户填——例如
+//!     `https://api.minimaxi.com/v1`、DeepSeek、本地 Ollama OpenAI
+//!     兼容层等）
+//!
+//! 实现要点（基于对 Mini-Agent `openai_client.py` 嘅理解 + Nova
+//! 之前诊断嘅实际 SSE 行为）：
+//!   - 必须 BufReader + read_line 流式逐行读，**不可**一次性
+//!     `response.text()`——MiniMax/DeepSeek 嘅 chunk 边界会 lazy
+//!     flush 导致 hang。
+//!   - 同时兼容 `data: {...}` 和 `data:{...}` 两种前缀。
+//!   - 错误响应走 `response.text()` 一次性读（非流式）。
+//!   - `Accept: text/event-stream` header 帮助部分 server 走 SSE 模式。
+
 use crate::provider::{ChatRequest, ChatResponse, LLMClient, StreamCallback, Usage};
 use reqwest::blocking::Client;
+use std::io::{BufRead, BufReader};
 
-/// 解析 OpenAI / OpenAI 兼容 provider 的 SSE 流。
-///
-/// 协议：`POST /v1/chat/completions` 携带 `stream: true`，
-/// 响应为 `Content-Type: text/event-stream`，每个事件格式：
-///
-///   data: {"id":"...","choices":[{"delta":{"content":"..."},...}]}
-///
-/// 终止标志：单独一行 `data: [DONE]`。
-///
-/// 4 个家族（OpenAI / DeepSeek / MiniMax / 任意 OpenAI 兼容）共用
-/// 同一个 SSE 解析路径——chunk 形状一致。
+/// POST {base_url}/chat/completions 带 `stream: true`，逐行解析 SSE。
 fn stream_openai_chat(
     http: &Client,
     url: &str,
@@ -23,27 +38,49 @@ fn stream_openai_chat(
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
         .json(&body)
         .send()
         .map_err(|e| format!("OpenAI 请求失败：{}", e))?;
 
     let status = response.status();
     if !status.is_success() {
+        // 错误响应一次性读 body
         let text = response.text().unwrap_or_default();
         return Err(format!("OpenAI 返回 {}：{}", status, text));
     }
 
-    let text = response.text().map_err(|e| e.to_string())?;
+    // 流式逐行读 SSE。`reqwest::blocking::Response` 本身实现 `Read`，
+    // 直接包 BufReader。每行 read_line 一到就解 chunk 推 delta，
+    // 唔等 chunked transfer 关闭。
+    let mut reader = BufReader::new(response);
+    let mut buf = String::new();
     let mut full_text = String::new();
     let mut usage: Option<Usage> = None;
 
-    for line in text.lines() {
-        let Some(payload) = line.strip_prefix("data: ") else {
+    loop {
+        buf.clear();
+        let n = reader
+            .read_line(&mut buf)
+            .map_err(|e| format!("SSE 读取失败：{}", e))?;
+        if n == 0 {
+            // 流结束
+            break;
+        }
+        let line = buf.trim_end();
+        // 同时兼容 "data: {...}" 和 "data:{...}"（部分 server 唔带空格）
+        let Some(payload) = line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+        else {
             continue;
         };
         let payload = payload.trim();
         if payload == "[DONE]" {
             break;
+        }
+        if payload.is_empty() {
+            continue;
         }
         let json: serde_json::Value = match serde_json::from_str(payload) {
             Ok(v) => v,
@@ -110,15 +147,11 @@ impl OpenAIClient {
         let status = response.status();
         let text = response.text().map_err(|e| e.to_string())?;
         if !status.is_success() {
-            return Err(format!(
-                "OpenAI 兼容 provider 返回 {}：{}",
-                status, text
-            ));
+            return Err(format!("OpenAI 兼容 provider 返回 {}：{}", status, text));
         }
 
         let json: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| format!("OpenAI 兼容 provider 返回了非法 JSON：{}\n{}", e, text))?;
-
         let content = json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
@@ -140,7 +173,7 @@ impl OpenAIClient {
 /// 把 base URL 解析成 `/v1/chat/completions` 完整端点。
 /// 兼容三种输入：
 ///   - 已经以 `/chat/completions` 结尾（用户填了完整端点）
-///   - 已经以 `/v1` 结尾（OpenAI 官方风格）
+///   - 已经以 `/v1` 结尾（OpenAI 官方风格 / minimaxi 之类）
 ///   - 裸根（如 `http://127.0.0.1:11434`）
 fn resolve_chat_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');

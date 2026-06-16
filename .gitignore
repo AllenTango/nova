@@ -26,3 +26,6 @@ src-tauri/gen/
 *.njsproj
 *.sln
 *.sw?
+
+# 本地 Hermes 工作目录（plan/debug binary 临时输出）
+.hermes/
