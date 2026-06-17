@@ -1,6 +1,6 @@
 # Nova — 星系式建站桌面应用
 
-> **Status**: v1.x（命题 A 已落地：chat 改 Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式）| **Date**: 2026-06-15 | **Role**: Dev Lead
+> **Status**: v1.x（命题 A 已落地：chat 改 Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式）| **v2.0 草案**（文件系统优先工作台系统，见 ADR 0004） | **Date**: 2026-06-17 | **Role**: Dev Lead
 >
 > 关联文档：
 > - [`docs/game-design.md`](docs/game-design.md) — 游戏化视觉与交互规范
@@ -8,18 +8,22 @@
 > - [`docs/conventions/001-comments-zh-CN.md`](docs/conventions/001-comments-zh-CN.md) — 代码注释简体中文约定
 > - [`docs/architecture-decisions/0001-provider-system.md`](docs/architecture-decisions/0001-provider-system.md) — Provider 系统设计
 > - [`docs/architecture-decisions/0002-chat-ipc-streaming.md`](docs/architecture-decisions/0002-chat-ipc-streaming.md) — Chat IPC 流式架构（取代 v1.0 HTTP fetch）
+> - [`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md) — Default-Model 显式状态管理
+> - [`docs/architecture-decisions/0004-workspace-system.md`](docs/architecture-decisions/0004-workspace-system.md) — 🔴 **v2.0 工作台系统与文件集成**（2026-06-17 新决策，Draft）
 
 ---
 
 ## 1. 背景与目标
 
-Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户先像管理 Markdown 笔记一样创建项目，之后可按需将项目点亮为 Astro 站点，无需接触底层实现。产品交互采用“星系建造游戏式”体验：项目是一颗星，笔记是星胚，站点是恒星，部署是信标发射。
+Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。**v2.0 方向**：采用**文件系统优先模型**，用户可直接打开现有文件夹（笔记、照片、视频），Nova 自动识别并"点亮"为项目；支持多工作台切换（对应不同"星系"）；任意状态的项目都能一键分享或发布。无需接触底层实现，内容管理体验如同文件浏览器。产品交互采用"星系建造游戏式"体验：工作台是星系，项目是一颗星，笔记是星胚，站点是恒星，分享与部署是信标发射。
 
 **核心价值**：
 - 普通人零代码建站（博客/作品集/企业官网/智能体主页）
+- 文件夹自动识别 → 一键发布（无需项目创建流程）
+- 支持多工作台切换（个人博客、旅游日志、企业官网分离）
+- 随处分享（任何编辑状态的项目都可分享）
 - AI Agent 可通过技能市场自动发现并调用 Nova 能力
-- 内容管理体验如同笔记应用
-- 游戏化成长体验：创建、写作、升级、部署都有可见反馈和进度感
+- 游戏化成长体验：发现新作品、导入项目、分享、发布都有可见反馈和进度感
 
 **应用场景**：
 - 个人博客/作品集：普通人零代码搭建，智能体辅助生成内容
@@ -33,6 +37,8 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 ## 2. 技术架构
 
 ### 2.1 整体架构
+
+#### 2.1.1 v1.x（当前）— 应用优先
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -57,6 +63,50 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 │  - nova.db      │      │  /mcp (未来 MCP)        │
 └─────────────────┘      └────────────────────────┘
 ```
+
+#### 2.1.2 v2.0（草案）— 工作台视图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Nova (Tauri)                           │
+│  ┌────────────────┐    ┌─────────────────────────┐        │
+│  │  React SPA     │◄──►│  Rust Backend           │        │
+│  │  工作台切换器  │    │  workspace_manager.rs   │        │
+│  │  星图 / 编辑器 │    │  project_scanner.rs     │        │
+│  │  Tauri webview │    │  Channel<ChatEvent> 流式 │        │
+│  └────────────────┘    └──────────┬──────────────┘        │
+│                                   │                        │
+│  ┌────────────────┐              │                        │
+│  │  Astro Preview │◄─────────────┘                        │
+│  │  (iframe 嵌入) │                                       │
+│  └────────────────┘                                       │
+└─────────────────────────────────────────────────────────────┘
+         │                │                    │
+         ▼                ▼                    ▼
+┌──────────────┐  ┌──────────────┐  ┌────────────────┐
+│ ~/.nova/     │  │ ~/MyWorks/   │  │ D:/WorkSite/   │
+│ (应用配置)   │  │ (工作台 1)   │  │ (工作台 2)     │
+│ config.json  │  │ .nova/db     │  │ .nova/db       │
+│ nova.db      │  │ projects/    │  │ projects/      │
+│ skills/      │  │ MyBlog/      │  │ CompanySite/   │
+│              │  │ PhotoAlbum/  │  │                │
+└──────────────┘  └──────────────┘  └────────────────┘
+                       │                    │
+                       ▼                    ▼
+              ┌──────────────┐     ┌──────────────┐
+              │ 外部 AI 入口 │     │ 站点发布目标 │
+              │ /v1/chat     │     │ Vercel/Netlfy│
+              │ /mcp (未来)  │     │ CloudFlare   │
+              └──────────────┘     └──────────────┘
+```
+
+**关键变化**（v1.x → v2.0）：
+- 数据所有权转移：`~/.nova/projects/` → 用户文件系统任意位置
+- 多工作台支持：每个工作台一份 `workspaces.db`，互不干扰
+- 项目发现方式：`.nova.yaml` 元数据 + 文件类型嗅探（不是 SQLite 主键）
+- 任何状态都能分享/发布（无需先"创建项目"流程）
+
+详细数据模型与迁移计划见 [ADR 0004](docs/architecture-decisions/0004-workspace-system.md)。
 
 **v1.x 变更**：chat 通讯从 v1.0 嘅 HTTP fetch + SSE wire 解析改为 Tauri 2 IPC + `tauri::ipc::Channel<ChatEvent>` 流式（命题 A）。HTTP server 收紧到只剩 `/health` + `/v1/chat/completions`（外部 OpenAI 兼容客户端用），见 ADR 0002。
 
@@ -86,24 +136,42 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 ## 3. 目录结构
 
 ```
-~/.nova/
-├── config.json              # 统一配置（nova_port / preview_port / theme / providers[] / provider_secrets{}，不入 SQLite）
-├── nova.db                  # SQLite 数据库（站点索引、部署记录）
+~/.nova/                        # Nova 应用目录
+├── config.json              # 配置（nova_port / theme / active_workspace / workspaces[] / providers[]）
+├── nova.db                  # SQLite 数据库（全局设置、部署记录）
+├── workspaces.db            # 工作台索引 (NEW)
 ├── skills/                  # 内置技能
 │   ├── nova.yaml           # Nova 核心技能（站点管理）
 │   ├── frontend-style.yaml  # 前端样式技能
-│   ├── frontend-component.yaml
-│   ├── backend-ssr.yaml
-│   └── ...
-└── projects/                # 项目目录（note 或 site）
-    └── {project-id}/
-        ├── notes/          # note 项目的 Markdown 内容
-        ├── content/        # site 项目的 Markdown 内容（posts/pages）
-        ├── src/            # Astro 源码（site 时存在）
-        ├── public/         # 静态资源（site 时存在）
-        ├── astro.config.mjs # Astro 配置（site 时存在）
-        └── site.yaml       # 站点元数据（site 时存在，用户不可见）
+│   ├── ...
+└── [已废弃] projects/       # v1.x 项目目录（迁移到工作台）
+
+~/MyWorks/                      # 工作台 1（用户文件系统）
+├── .nova/
+│   ├── workspaces.db        # 工作台索引
+│   └── sync-history.json
+├── My Blog/                 # 项目 1
+│   ├── posts/               # 博客文章
+│   │   ├── hello.md
+│   │   └── tech.md
+│   ├── photos/              # 相册
+│   ├── .nova.yaml           # 项目元数据 (NEW)
+│   └── [用户其他文件]
+├── Photo Album/             # 项目 2
+│   ├── summer/
+│   ├── winter/
+│   └── .nova.yaml
+└── [用户其他任意内容]        # 未来 6 个模板会写入对应结构
+
+D:/WorkSite/                   # 工作台 2（用户文件系统，D 盘）
+├── CompanySite/             # 企业站点
+│   ├── products/
+│   ├── team/
+│   └── .nova.yaml
+└── ...
 ```
+
+> **关键不变量**：用户的工作台和项目都是普通文件夹；Nova 看到 `.nova.yaml` 才认定是项目，否则就是普通文件。
 
 ---
 
@@ -111,7 +179,18 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 
 ### 4.1 星系式项目管理
 
+#### 4.1.0 工作台（v2.0 草案）
+
+- **工作台 = 用户的任意文件夹**：选择 `~/MyWorks/` 或 `D:/WorkSite/` 即可成为工作台，Nova 在其根目录创建 `.nova/` 目录
+- **多工作台切换**：顶栏左侧展示"当前星系"，下拉切换到其他工作台；每个工作台拥有独立项目集合
+- **项目 = 文件夹 + `.nova.yaml`**：Nova 通过文件类型嗅探（Markdown / 图片 / 视频）和 `.nova.yaml` 元数据识别项目
+- **零创建流程**：用户直接打开文件夹即可；Nova 看到 `.nova.yaml` 才认定是项目
+- **双形态**：`note`（纯 Markdown 笔记）或 `site`（Astro 站点），可在项目内随时切换
+
+#### 4.1.1 星图与游戏化
+
 - **星图概览**：所有项目以星体展示，而非传统 SaaS 卡片列表
+- **星系视角**：每个工作台是一个"星系"，星图展示当前工作台的所有项目
 - **项目双形态**：项目可为 `note`（纯 Markdown 笔记）或 `site`（Astro 站点）
 - **先笔记后建站**：新建时只需输入项目名称，是否成为站点可进入项目后再决定
 - **站点配置**：`site.yaml` 存在站点目录内，用户不可见
@@ -119,19 +198,31 @@ Nova 是一款面向普通人与 AI Agent 的桌面创作/建站工具。用户�
 
 完整的游戏化视觉规范（色彩宇宙、字体、星体阶段、动效边界、文案语气）见 [`docs/game-design.md`](docs/game-design.md)。
 
-### 4.1.1 游戏化交互模型
+### 4.1.2 游戏化交互模型
 
-Nova 的游戏感来自“行动 → 反馈 → 成长 → 奖励”的闭环，而不是持续动效。
+Nova 的游戏感来自"行动 → 反馈 → 成长 → 奖励"的闭环，而不是持续动效。
 
 | 产品动作 | 游戏化表达 | 反馈 |
 |---|---|---|
+| **v2.0 新增：打开工作台** | **星系降临** | 工作台首次打开时全屏星云展开动画 1.2s |
+| **v2.0 新增：发现项目** | **捕获新星** | 文件夹被识别为项目时流星划过一次性彩蛋 |
+| **v2.0 新增：导入项目** | **新星诞生** | 现有文件夹升级为项目时的入场动效 |
 | 创建项目 | 种下一颗星 | 星点从暗到亮 |
 | 创建纯笔记 | 星胚诞生 | 微弱星光 |
 | 升级为站点 | 点亮为恒星 | 光环扩散 |
 | 保存内容 | 星等提升 | 轻微脉冲 |
+| **v2.0 新增：一键分享** | **流星雨** | 任何状态项目都可分享；分享链接生成时流星划过头顶 |
 | 部署站点 | 发射信标 | 星体向外发射光束 |
+| **v2.0 新增：发布到公网** | **信标闪烁** | 部署完成时恒星闪烁 + 一次性光束 |
 | 删除项目 | 星体退场 | 星点塌缩/消散 |
 | 达成里程碑 | 流星划过 | 一次性彩蛋 |
+
+**v2.0 关键变化**：
+- **发现代替创建**：用户不再需要"创建项目"流程；打开文件夹即发现
+- **分享随时随地**：任何状态的项目（含未保存的草稿、纯笔记）都能分享
+- **多工作台隔离**：每个工作台的项目状态、星图进度、成就独立计算
+
+详细规则（星体阶段、天文台统计、动效边界、文案语气）见 [`docs/game-design.md`](docs/game-design.md)。
 
 详细规则（星体阶段、天文台统计、动效边界、文案语气）见 [`docs/game-design.md`](docs/game-design.md)。
 
@@ -564,7 +655,21 @@ nova/
 
 ---
 
-## 11. v1.x Changelog
+## 11. Changelog
+
+### 2026-06-17：ADR 0004 v2.0 工作台系统（Draft 决策）
+
+- **方向调整**：v2.0 从"应用优先"转向"**文件系统优先**"——用户可直接打开任意文件夹作为工作台，Nova 自动识别并"点亮"为项目
+- **新决策**：[`docs/architecture-decisions/0004-workspace-system.md`](docs/architecture-decisions/0004-workspace-system.md)（Draft）
+- **关键变化**：
+  - 数据所有权从 `~/.nova/projects/` 转移到用户文件系统任意位置（`~/MyWorks/` / `D:/WorkSite/`）
+  - 多工作台切换（每个工作台是一份独立的 `workspaces.db` + 项目集合，对应不同"星系"）
+  - 项目元数据从 SQLite 迁出为每个项目的 `.nova.yaml` 文件
+  - 任何状态的项目都能一键分享或发布（无需"创建项目"流程）
+  - 项目发现方式：`.nova.yaml` 存在 + 文件类型嗅探（Markdown / 图片 / 视频）
+- **本文件已同步**：§1 背景目标 / §2.1 整体架构（v1.x + v2.0 双图）/ §3 目录结构 / §4.1 项目管理 / §4.1.2 游戏化交互模型（新增 4 个 v2.0 事件）
+- **AGENTS.md 索引同步**：§3 必读文档加入 ADR 0004
+- **状态**：Draft（待 3 阶段实现落地：Stage 1 数据模型 → Stage 2 前端工作台切换器 → Stage 3 文件监听与即时发现）
 
 ### 2026-06-16：ADR 0003 Stage 4 fix（Settings picker + IPC 根因 + State batching）
 
@@ -694,8 +799,10 @@ docs/
 ├── conventions/
 │   └── 001-comments-zh-CN.md    # 代码注释简体中文约定
 └── architecture-decisions/
-    ├── 0001-provider-system.md  # Provider 系统设计
-    └── 0002-chat-ipc-streaming.md  # Chat IPC 流式架构
+    ├── 0001-provider-system.md        # Provider 系统设计（Accepted）
+    ├── 0002-chat-ipc-streaming.md      # Chat IPC 流式架构（Accepted）
+    ├── 0003-default-model.md          # Default-Model 显式状态管理（Draft，Stage 1+2+3+4 落地）
+    └── 0004-workspace-system.md       # v2.0 工作台系统与文件集成（Draft，2026-06-17）
 ```
 
 AI 协作者必读 [`AGENTS.md`](AGENTS.md)。
