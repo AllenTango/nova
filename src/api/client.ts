@@ -135,6 +135,10 @@ export interface ProviderEntry {
   api_key_required: boolean;
   kind: FamilyKind;
   base_url: string;
+  /// API key 掩码（最后 4 位明文 + 前面 `••••`）——edit 模式 prefill
+  /// 输入框用。`Some(masked)` = 有 secret；`None` = 冇 secret。
+  /// 永远唔返明文 prefix（安全考虑）。
+  api_key_masked?: string;
   model: string;
   source: ProviderSource;
 }
@@ -151,6 +155,9 @@ export interface NewProvider {
 
 export interface UpdateProvider {
   id: string;
+  /// 自定义 provider（OpenAI/Anthropic 兼容）重命名 id 用。
+  /// 传入时 backend 会移动 entry 同 secret，并同步更新 default_provider_id。
+  new_id?: string;
   label?: string;
   base_url?: string;
   // ADR 0003 Stage 2 cleanup：`model` 字段移除——update 路径不做

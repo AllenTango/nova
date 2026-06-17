@@ -32,14 +32,52 @@ interface ChatDone {
 interface ChatError {
   type: "error";
   message: string;
+  /**
+   * Stage 4 fallback 元数据。`Some` 表示 Rust 端已自动切换 default model
+   * （或 fallback 失败），前端用此字段显示「⚠ 已自动切换到 XXX」chip。
+   */
+  fallback?: {
+    old_provider_id: string;
+    old_model_id: string;
+    new_provider_id: string;
+    new_model_id: string;
+  };
 }
-type ChatEvent = ChatDelta | ChatDone | ChatError;
+/**
+ * Stage 4 fallback notice：非终止事件。Rust 端在 fallback 成功时
+ * 会先发一条 Notice（前端 chip 显示），再继续流式推 delta。
+ */
+interface ChatNotice {
+  type: "notice";
+  kind: "fallback_switched";
+  message: string;
+  old_provider_id: string;
+  old_model_id: string;
+  new_provider_id?: string | null;
+  new_model_id: string;
+}
+type ChatEvent = ChatDelta | ChatDone | ChatError | ChatNotice;
+
+/**
+ * 当前 stream 嘅 fallback 状态。提供给消费方（如 AIChatPanel）显示 chip。
+ * - `pending` = fallback notice 已收到但 stream 未结束
+ * - `final` = stream 已结束（success 时 Done / fail 时 Error 带 fallback）
+ */
+export interface FallbackState {
+  oldModelId: string;
+  newModelId: string;
+  newProviderId: string;
+  success: boolean;
+}
 
 export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // ADR 0003 Stage 4：当前 stream 嘅 fallback 状态。`null` = 无 fallback。
+  // 消费方用此字段显示「⚠ 已自动切换到 XXX」chip。
+  const [fallback, setFallback] = useState<FallbackState | null>(null);
   // 追踪进行中的流调用。JS 端没法 `abort()` Tauri invoke，
   // 但我们持有这个句柄，让 `stop()` 翻个 flag，Channel 回调
   // 在追加文本前会检查。
@@ -54,6 +92,8 @@ export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
       setInput("");
       setIsLoading(true);
       setError(null);
+      // 新一轮 stream：清旧 fallback chip
+      setFallback(null);
 
       // 递增 epoch——上一次 sendMessage 的 in-flight channel 回调
       // 会看到新 epoch 然后 bail out，把它持有的 delta 扔地上。
@@ -78,8 +118,25 @@ export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
             };
             return updated;
           });
+        } else if (event.type === "notice" && event.kind === "fallback_switched") {
+          // Stage 4 fallback notice：记录 fallback 状态供 chip 显示。
+          setFallback({
+            oldModelId: event.old_model_id,
+            newModelId: event.new_model_id,
+            newProviderId: event.new_provider_id ?? "",
+            success: true,
+          });
         } else if (event.type === "error") {
           setError(new Error(event.message));
+          // Stage 4：error 附带 fallback 表示已自动切换，但 stream 仍失败
+          if (event.fallback) {
+            setFallback({
+              oldModelId: event.fallback.old_model_id,
+              newModelId: event.fallback.new_model_id,
+              newProviderId: event.fallback.new_provider_id,
+              success: !!event.fallback.new_model_id,
+            });
+          }
           // 移除空/半截 assistant 气泡。
           setMessages((prev) => prev.slice(0, -1));
           setIsLoading(false);
@@ -139,5 +196,9 @@ export function useLocalAI({ overrides }: UseLocalAIOptions = {}) {
     setMessages,
     error,
     stop,
+    // ADR 0003 Stage 4：当前 stream 嘅 fallback 状态（消费方 chip 用）
+    fallback,
+    // 清 fallback chip（例如用户主动 dismiss 时）
+    clearFallback: () => setFallback(null),
   };
 }

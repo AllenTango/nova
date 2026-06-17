@@ -50,6 +50,9 @@ fn make_preset_entry(
         model: String::new(),
         models: Vec::new(),
         source: ProviderSource::Preset,
+        // Preset 路径：api_key_masked 由 `list_all` 统一 populate
+        // （基于 secrets 查表）。
+        api_key_masked: None,
     })
 }
 
@@ -59,6 +62,11 @@ fn make_preset_entry(
 ///   1. 预设——仅当 `provider_secrets` 里有匹配的 API key。
 ///      没 key 的 provider 不可用，所以隐藏。
 ///   2. 用户添加的条目——`OpenaiCompat` / `AnthropicCompat`。
+///
+/// **Populate `api_key_masked`**（波士 2026-06-17）：根据 secrets 表
+/// 喺 `list_all` 末尾统一注入——preset 路径同 user 路径都过呢个统一逻辑。
+/// 冇 secret → `None`（frontend 输入框空白，placeholder 不显示「已配置」）。
+/// 有 secret → `Some("••••xxxx")`（最后 4 位明文，前缀 `••••` 长度=长度-4）。
 pub fn list_all(app: &tauri::AppHandle) -> Result<Vec<ProviderEntry>, String> {
     let secrets = nova_config::read_secrets(app);
     let preset_overrides = nova_config::read_preset_overrides(app);
@@ -73,7 +81,30 @@ pub fn list_all(app: &tauri::AppHandle) -> Result<Vec<ProviderEntry>, String> {
 
     let mut combined = presets;
     combined.extend(user);
+    // 统一 populate `api_key_masked`：所有 entry 都过呢个逻辑，
+    // preset 路径喺 filter 入面已 verified 有 secret，user 路径
+    // 由 `read_providers` 本身带唔带 key 决定。
+    for entry in combined.iter_mut() {
+        entry.api_key_masked = secrets
+            .get(&entry.id)
+            .and_then(|k| if k.is_empty() { None } else { Some(mask_key(k)) });
+    }
     Ok(combined)
+}
+
+/// API key 掩码生成：`••••xxxx`（最后 4 位明文 + 前面 `••••`）。
+/// - key 长度 ≤ 4 → 全部掩码（`••••`，长度 = 原长度）
+/// - key 长度 > 4 → 掩码部分长度 = `key.len() - 4`，最后 4 位明文
+/// - 永远唔返明文 prefix
+fn mask_key(key: &str) -> String {
+    let len = key.chars().count();
+    if len <= 4 {
+        "•".repeat(len)
+    } else {
+        let mask_count = len - 4;
+        let visible: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("{}{}", "•".repeat(mask_count), visible)
+    }
 }
 
 /// 追加一个新用户 provider。成功时返回新条目。
@@ -120,6 +151,9 @@ pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, St
         model: String::new(),
         models: Vec::new(),
         source: ProviderSource::User,
+        // 新建路径：api_key_masked 由 caller 决定——通常 `add` 入面会
+        // 立即调 `list_all` 重新拉取（populate masked），呢度保持 None。
+        api_key_masked: None,
     };
     providers.push(entry.clone());
     nova_config::write_providers(app, &providers)?;
@@ -141,35 +175,81 @@ pub fn add(app: &tauri::AppHandle, new: NewProvider) -> Result<ProviderEntry, St
     Ok(entry)
 }
 
-/// 对已存在的 provider 应用部分更新。
+/// 对已存在的 provider 应用部分更新。自定义 provider 可藉 `new_id` 重命名。
 pub fn update(app: &tauri::AppHandle, patch: UpdateProvider) -> Result<ProviderEntry, String> {
     let id = patch.id.clone();
 
-    let mut providers = nova_config::read_providers(app);
+    let mut config = nova_config::read_config(app);
 
-    if let Some(entry) = providers.iter_mut().find(|p| p.id == id) {
+    // 用 index 定位：先 immutable find（住喺 idx），再 mutable index。
+    let idx = config.providers.iter().position(|p| p.id == id);
+
+    // ── User provider 路径 ────────────────────────────────
+    if let Some(idx) = idx {
+        let old_id = config.providers[idx].id.clone();
+
+        // 唯一性检查：此时只持有 immutable borrow，无冲突。
+        if let Some(ref new_id) = patch.new_id {
+            let new_id = new_id.trim().to_string();
+            if new_id.is_empty() {
+                return Err("provider id cannot be empty".into());
+            }
+            if !new_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(
+                    "provider id may only contain letters, digits, '-', '_', '.'".into(),
+                );
+            }
+            if PRESET_FAMILIES.contains(&new_id.as_str()) {
+                return Err(format!("provider id '{new_id}' is reserved for preset"));
+            }
+            if config.providers.iter().any(|p| p.id == new_id && p.id != old_id) {
+                return Err(format!("provider id already exists: {new_id}"));
+            }
+        }
+
+        // 现在开始 mutation——fresh mutable borrow
+        let entry = &mut config.providers[idx];
+
+        if let Some(new_id) = patch.new_id {
+            let new_id = new_id.trim().to_string();
+            entry.id = new_id.clone();
+            // 移动 secret 到新 id
+            if let Some(key) = config.provider_secrets.remove(&old_id) {
+                config.provider_secrets.insert(new_id.clone(), key);
+            }
+            // 如果重命名嘅系当前 default provider，同步更新 default 指针
+            if config.default_provider_id.as_deref() == Some(&old_id) {
+                config.default_provider_id = Some(new_id);
+            }
+        }
+
+        let current_id = entry.id.clone();
+
         if let Some(label) = patch.label {
             entry.label = label;
         }
         if let Some(base_url) = patch.base_url {
             entry.base_url = base_url;
         }
-        // ADR 0003 Stage 2 cleanup：移除 patch.model 处理——update
-        // 路径不做 set_default（避免 silent override 当前 default）；
-        // 改 default 走独立 `set_default_model` command。
-        let updated = entry.clone();
-        nova_config::write_providers(app, &providers)?;
 
+        // 处理 api_key 更新
         if let Some(key) = patch.api_key {
             if key.is_empty() {
-                nova_config::clear_secret(app, &id)?;
+                config.provider_secrets.remove(&current_id);
             } else {
-                nova_config::write_secret(app, &id, &key)?;
+                config.provider_secrets.insert(current_id, key);
             }
         }
+
+        let updated = entry.clone();
+        nova_config::write_config(app, &config)?;
         return Ok(updated);
     }
 
+    // ── 非 user provider：预设路径 ────────────────────────
     if !PRESET_FAMILIES.contains(&id.as_str()) {
         return Err(format!("provider not found: {id}"));
     }

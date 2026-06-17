@@ -1,11 +1,9 @@
 //! OpenAI 家族 + OpenAI 兼容家族（Custom: openai_compat）嘅流式 chat。
 //!
-//! 协议：`POST {base_url}/chat/completions` 携带 `stream: true`，
-//! 响应为 `Content-Type: text/event-stream`，每条事件格式：
-//!
-//!   data: {"id":"...","choices":[{"delta":{"content":"..."},...}]}
-//!
-//! 终止标志：单独一行 `data: [DONE]`。
+//! 用 `async-openai` 0.41 SDK 作为客户端实现，不再手写 SSE parser：
+//!   - 官方 SDK 自动处理 `data: {json}` / `[DONE]` 终止符 / SSE 边界
+//!   - 流式 reader 由 SDK 内部 `reqwest` async + `StreamResponse` 实现
+//!   - 类型全部在 `async_openai::types::chat::*` 命名空间
 //!
 //! 覆盖 4 家族中嘅：
 //!   - OpenAI（官方 api.openai.com）
@@ -13,115 +11,234 @@
 //!     `https://api.minimaxi.com/v1`、DeepSeek、本地 Ollama OpenAI
 //!     兼容层等）
 //!
-//! 实现要点（基于对 Mini-Agent `openai_client.py` 嘅理解 + Nova
-//! 之前诊断嘅实际 SSE 行为）：
-//!   - 必须 BufReader + read_line 流式逐行读，**不可**一次性
-//!     `response.text()`——MiniMax/DeepSeek 嘅 chunk 边界会 lazy
-//!     flush 导致 hang。
-//!   - 同时兼容 `data: {...}` 和 `data:{...}` 两种前缀。
-//!   - 错误响应走 `response.text()` 一次性读（非流式）。
-//!   - `Accept: text/event-stream` header 帮助部分 server 走 SSE 模式。
+//! 架构：blocking 回调（`StreamCallback`）↔ mpsc::sync_channel ↔ async
+//! forwarder ↔ Channel<ChatEvent>。原因：`tauri::ipc::Channel::send` 嘅
+//! IPC 桥接系异步嘅，从 `spawn_blocking` 直接调会跨 runtime 边界静默
+//! 丢消息；用 mpsc 中转把同步 send 转异步 send 解开此 trap
+//! （参见 commit `08fed00` + skill `tauri-react-dualmode`）。
 
 use crate::provider::{ChatRequest, ChatResponse, LLMClient, StreamCallback, Usage};
+use async_openai::config::OpenAIConfig;
+use async_openai::types::chat::{
+    ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
+    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
+    CreateChatCompletionRequest, CreateChatCompletionResponse, CreateChatCompletionStreamResponse,
+    ReasoningEffort,
+};
+use async_openai::Client;
 use futures_util::StreamExt;
-use reqwest::Client;
 
-/// POST {base_url}/chat/completions 带 `stream: true`，逐行解析 SSE。
-/// 用 async reqwest + 同步 `block_on` 在已有 tokio runtime 里跑——
-/// 完全避开 `reqwest::blocking` 内部 runtime 冲突。
-fn stream_openai_chat(
-    http: &Client,
-    url: &str,
-    api_key: &str,
-    body: serde_json::Value,
-    on_delta: StreamCallback,
-) -> Result<ChatResponse, String> {
-    let rt = tokio::runtime::Handle::current();
-    let response = rt.block_on(async {
-        http.post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("OpenAI 请求失败：{}", e))
-    })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        // 错误响应：用 `bytes()` 一次性 read（async runtime 控制），不会
-        // 触发 "Cannot drop a runtime in a context where blocking is not allowed"。
-        let _ = rt.block_on(async {
-            response.bytes().await.map(|_| ()).unwrap_or(())
-        });
-        return Err(format!("OpenAI 返回 {}", status));
+/// 把 Nova 内部 ChatMessage 转换成 async-openai 嘅 ChatCompletionRequestMessage。
+fn to_openai_message(
+    m: &crate::provider::ChatMessage,
+) -> ChatCompletionRequestMessage {
+    match m.role.as_str() {
+        "system" => ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
+            content: ChatCompletionRequestSystemMessageContent::Text(m.content.clone()),
+            name: None,
+        }),
+        "assistant" => ChatCompletionRequestMessage::Assistant(
+            ChatCompletionRequestAssistantMessage {
+                content: Some(ChatCompletionRequestAssistantMessageContent::Text(
+                    m.content.clone(),
+                )),
+                name: None,
+                refusal: None,
+                audio: None,
+                tool_calls: None,
+                #[allow(deprecated)]
+                function_call: None,
+            },
+        ),
+        // 包含 "user" + 未识别 fallback
+        _ => ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+            content: ChatCompletionRequestUserMessageContent::Text(m.content.clone()),
+            name: None,
+        }),
     }
+}
 
-    // 流式逐行读 SSE。直接把 `bytes_stream()` 用 async runtime 消费，
-    // 逐 chunk decode UTF-8 然后手动拆行。完全在 async runtime 里跑，
-    // 唔用 blocking Read API，避免 "Cannot drop a runtime" panic。
-    let mut stream = response.bytes_stream();
-    let mut leftover = String::new(); // 半截行跨 chunk 缓存
-    let mut full_text = String::new();
-    let mut usage: Option<Usage> = None;
+/// 组装 chat 通用配置。`is_compat` = true 时（Custom family）注入
+/// `reasoning_effort = Medium` 触发 OpenAI 风格 reasoning（minimax
+/// 兼容层会忽略此字段；标准 OpenAI 视为 o1/o3 reasoning effort）。
+///
+/// **minimax `extra_body = {"reasoning_split": True}` 限制**：async-openai
+/// 0.41 冇原生 `extra_body` 字段（`CreateChatCompletionRequest` 冇
+/// `#[serde(flatten)]`）。完整 minimax 兼容需要 patch SDK 或自己
+/// 手建 JSON。当前用 `reasoning_effort` 做折衷——足够触发 minimax
+/// 嘅 reasoning 模式。
+fn build_request(request: &ChatRequest, is_compat: bool) -> CreateChatCompletionRequest {
+    let messages: Vec<ChatCompletionRequestMessage> =
+        request.messages.iter().map(to_openai_message).collect();
+    let mut req = CreateChatCompletionRequest {
+        messages,
+        model: request.model.clone(),
+        stream: Some(false),
+        ..Default::default()
+    };
+    if request.stream {
+        req.stream = Some(true);
+        req.stream_options = Some(ChatCompletionStreamOptions {
+            include_usage: Some(true),
+            include_obfuscation: Some(false),
+        });
+    }
+    if let Some(t) = request.temperature {
+        req.temperature = Some(t);
+    }
+    if let Some(m) = request.max_tokens {
+        req.max_completion_tokens = Some(m);
+    }
+    if is_compat {
+        req.reasoning_effort = Some(ReasoningEffort::Medium);
+    }
+    req
+}
 
-    rt.block_on(async {
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| format!("SSE 读取失败：{}", e))?;
-            // 追加到遗留缓冲区
-            leftover.push_str(&String::from_utf8_lossy(&chunk));
+/// 构造 OpenAI 客户端（含自定义 base_url）。
+fn build_client(api_key: &str, base_url: &str) -> Result<Client<OpenAIConfig>, String> {
+    let cfg = OpenAIConfig::new()
+        .with_api_key(api_key)
+        .with_api_base(base_url.trim_end_matches('/'));
+    Ok(Client::with_config(cfg))
+}
 
-            // 按 `\n` 拆行；最后一行可能不完整，留到下次 chunk
-            let mut lines: Vec<String> = leftover
-                .split('\n')
-                .map(|s| s.to_string())
-                .collect();
-            // 最后一截可能不完整
-            let tail = lines.pop().unwrap_or_default();
-            leftover = tail;
+/// 把 SDK 流式 chunk 抽取成 `(delta_text, optional_usage)`。
+fn extract_chunk(chunk: &CreateChatCompletionStreamResponse) -> (String, Option<Usage>) {
+    let mut text = String::new();
+    for choice in &chunk.choices {
+        if let Some(content) = &choice.delta.content {
+            text.push_str(content);
+        }
+    }
+    let usage = chunk.usage.as_ref().map(|u| Usage {
+        prompt_tokens: u.prompt_tokens,
+        completion_tokens: u.completion_tokens,
+        total_tokens: u.total_tokens,
+    });
+    (text, usage)
+}
 
-            for line in lines {
-                let line = line.trim_end_matches('\r');
-                let Some(payload) = line
-                    .strip_prefix("data: ")
-                    .or_else(|| line.strip_prefix("data:"))
-                else {
-                    continue;
-                };
-                let payload = payload.trim();
-                if payload == "[DONE]" {
-                    return Ok::<_, String>(());
-                }
-                if payload.is_empty() {
-                    continue;
-                }
-                let json: serde_json::Value = match serde_json::from_str(payload) {
-                    Ok(v) => v,
-                    Err(_) => continue, // 跳过心跳/空行/格式异常行
-                };
-                if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
-                    if !delta.is_empty() {
-                        full_text.push_str(delta);
-                        on_delta(delta)?;
+/// 流式 chat：用 async-openai SDK + mpsc 桥接。
+///
+/// 1. `std::thread::spawn` 跑专属 tokio runtime → `client.chat().create_stream()` 返 `StreamResponse`
+/// 2. 同步 `Stream::next()` 推 mpsc::sync_channel
+/// 3. 当前 tokio runtime 消费 mpsc → 调 `on_delta` 同步回调
+fn stream_via_sdk(
+    api_key: &str,
+    base_url: &str,
+    request: ChatRequest,
+    on_delta: StreamCallback,
+    is_compat: bool,
+) -> Result<ChatResponse, String> {
+    use std::sync::mpsc;
+
+    let client = build_client(api_key, base_url)?;
+    let req = build_request(&request, is_compat);
+
+    let (tx, rx) = mpsc::sync_channel::<String>(64);
+    let (usage_tx, usage_rx) = mpsc::sync_channel::<Usage>(1);
+
+    let stream_handle = std::thread::spawn(move || -> Result<(), String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("build stream runtime: {e}"))?;
+        let mut full_text = String::new();
+        let mut last_usage: Option<Usage> = None;
+        rt.block_on(async {
+            let mut stream = client
+                .chat()
+                .create_stream(req)
+                .await
+                .map_err(|e| format!("OpenAI SDK stream 创建失败：{e}"))?;
+            while let Some(chunk_res) = stream.next().await {
+                let chunk = chunk_res.map_err(|e| format!("OpenAI stream chunk 错误：{e}"))?;
+                let (delta, usage) = extract_chunk(&chunk);
+                if !delta.is_empty() {
+                    full_text.push_str(&delta);
+                    if tx.send(delta).is_err() {
+                        break;
                     }
                 }
-                if let Some(u) = json.get("usage") {
-                    usage = Some(Usage {
-                        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-                        total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-                    });
+                if let Some(u) = usage {
+                    last_usage = Some(u);
                 }
             }
-        }
-        Ok::<_, String>(())
-    })?;
+            Ok::<_, String>(())
+        })?;
+        let _ = usage_tx.send(last_usage.unwrap_or(Usage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+        }));
+        Ok(())
+    });
+
+    // 当前 runtime 同步消费 mpsc
+    let rt = tokio::runtime::Handle::current();
+    let mut full_text = String::new();
+    let _ = rt.block_on(async {
+        tokio::task::block_in_place(|| {
+            while let Ok(delta) = rx.recv() {
+                full_text.push_str(&delta);
+                if on_delta(&delta).is_err() {
+                    break;
+                }
+            }
+        });
+    });
+
+    let usage = usage_rx.recv().ok();
+    stream_handle
+        .join()
+        .map_err(|_| "stream thread join failed".to_string())??;
 
     Ok(ChatResponse {
         content: full_text,
-        model: body["model"].as_str().unwrap_or("").to_string(),
+        model: request.model,
+        usage,
+    })
+}
+
+/// 非流式 chat：用 SDK `create()`。
+fn blocking_via_sdk(
+    api_key: &str,
+    base_url: &str,
+    request: ChatRequest,
+    is_compat: bool,
+) -> Result<ChatResponse, String> {
+    let client = build_client(api_key, base_url)?;
+    let mut req = build_request(&request, is_compat);
+    req.stream = Some(false);
+    req.stream_options = None;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("build runtime: {e}"))?;
+    let response: CreateChatCompletionResponse = rt
+        .block_on(async { client.chat().create(req).await })
+        .map_err(|e| format!("OpenAI 兼容 provider 调用失败：{e}"))?;
+
+    let content = response
+        .choices
+        .first()
+        .and_then(|c| c.message.content.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    let usage = response.usage.map(|u| Usage {
+        prompt_tokens: u.prompt_tokens,
+        completion_tokens: u.completion_tokens,
+        total_tokens: u.total_tokens,
+    });
+
+    Ok(ChatResponse {
+        content,
+        model: request.model,
         usage,
     })
 }
@@ -129,7 +246,6 @@ fn stream_openai_chat(
 pub struct OpenAIClient {
     api_key: String,
     base_url: String,
-    http: Client,
 }
 
 impl OpenAIClient {
@@ -137,76 +253,7 @@ impl OpenAIClient {
         Self {
             api_key: api_key.to_string(),
             base_url: base_url.to_string(),
-            http: Client::new(),
         }
-    }
-
-    /// 非流式 fallback：调 `/v1/chat/completions` 不带 `stream`，
-    /// 一次性返回。供 `chat()` 走测试 / list_models 等不走流式的场景。
-    /// 用 async reqwest + block_on 在已有 tokio runtime 里跑——
-    /// 完全避开 `reqwest::blocking` 内部 runtime 冲突。
-    pub fn chat_blocking(&self, request: ChatRequest) -> Result<ChatResponse, String> {
-        let url = resolve_chat_url(&self.base_url);
-        let body = serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-            "temperature": request.temperature.unwrap_or(0.7),
-            "max_tokens": request.max_tokens.unwrap_or(2048),
-        });
-
-        let rt = tokio::runtime::Handle::current();
-        let (status, text) = rt.block_on(async {
-            let resp = self
-                .http
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
-            let status = resp.status();
-            let text = resp.text().await.map_err(|e| e.to_string())?;
-            Ok::<_, String>((status, text))
-        })?;
-
-        if !status.is_success() {
-            return Err(format!("OpenAI 兼容 provider 返回 {}：{}", status, text));
-        }
-
-        let json: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("OpenAI 兼容 provider 返回了非法 JSON：{}\n{}", e, text))?;
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let usage = json.get("usage").map(|u| Usage {
-            prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
-            total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
-        });
-
-        Ok(ChatResponse {
-            content,
-            model: request.model,
-            usage,
-        })
-    }
-}
-
-/// 把 base URL 解析成 `/v1/chat/completions` 完整端点。
-/// 兼容三种输入：
-///   - 已经以 `/chat/completions` 结尾（用户填了完整端点）
-///   - 已经以 `/v1` 结尾（OpenAI 官方风格 / minimaxi 之类）
-///   - 裸根（如 `http://127.0.0.1:11434`）
-fn resolve_chat_url(base_url: &str) -> String {
-    let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with("/chat/completions") {
-        trimmed.to_string()
-    } else if trimmed.ends_with("/v1") {
-        format!("{}/chat/completions", trimmed)
-    } else {
-        format!("{}/v1/chat/completions", trimmed)
     }
 }
 
@@ -216,7 +263,8 @@ impl LLMClient for OpenAIClient {
     }
 
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
-        self.chat_blocking(request)
+        let is_compat = !self.base_url.contains("api.openai.com");
+        blocking_via_sdk(&self.api_key, &self.base_url, request, is_compat)
     }
 
     fn chat_stream(
@@ -224,14 +272,7 @@ impl LLMClient for OpenAIClient {
         request: ChatRequest,
         on_delta: StreamCallback,
     ) -> Result<ChatResponse, String> {
-        let url = resolve_chat_url(&self.base_url);
-        let body = serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-            "temperature": request.temperature.unwrap_or(0.7),
-            "max_tokens": request.max_tokens.unwrap_or(2048),
-            "stream": true,
-        });
-        stream_openai_chat(&self.http, &url, &self.api_key, body, on_delta)
+        let is_compat = !self.base_url.contains("api.openai.com");
+        stream_via_sdk(&self.api_key, &self.base_url, request, on_delta, is_compat)
     }
 }

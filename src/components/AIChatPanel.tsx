@@ -213,6 +213,15 @@ export default function AIChatPanel({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localAI.messages, localAI.isLoading]);
 
+  // ADR 0003 Stage 4 fallback：fallback 触发后 Rust 已写入 default 字段，
+  // 同步刷新 top bar 显示嘅「链路 ID / model」。refreshDefault 本身
+  // 已存在（用于 /switch + hydration），复用即可。
+  useEffect(() => {
+    if (localAI.fallback?.success) {
+      refreshDefault();
+    }
+  }, [localAI.fallback, refreshDefault]);
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || localAI.isLoading || !settings) return;
@@ -486,6 +495,58 @@ export default function AIChatPanel({
                     gap: 1.5,
                   }}
                 >
+                  {/* ADR 0003 Stage 4 fallback chip：当 Rust 端识别到上游
+                      model_not_found 类错误，自动切换 default model 并发
+                      Notice 事件；前端在 messages 列表顶部显示一条
+                      ephemeral chip 提示用户。 */}
+                  {localAI.fallback && (
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 1,
+                        px: 1.5,
+                        py: 0.75,
+                        background: localAI.fallback.success
+                          ? "rgba(255, 170, 0, 0.08)"
+                          : "rgba(255, 80, 80, 0.08)",
+                        border: `1px solid ${
+                          localAI.fallback.success
+                            ? "rgba(255, 170, 0, 0.4)"
+                            : "rgba(255, 80, 80, 0.4)"
+                        }`,
+                        borderRadius: 1,
+                        fontSize: 12,
+                        fontFamily: FONT.mono,
+                        color: t.starDim,
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          color: localAI.fallback.success ? "#fa0" : "#f55",
+                          fontWeight: 600,
+                        }}
+                      >
+                        ⚠
+                      </Box>
+                      <Box sx={{ flexGrow: 1 }}>
+                        {localAI.fallback.success
+                          ? `模型 ${localAI.fallback.oldModelId} 已失效，自动切换到 ${localAI.fallback.newModelId}`
+                          : `模型 ${localAI.fallback.oldModelId} 已失效，fallback 候选为空——请到 Settings 手动重选`}
+                      </Box>
+                      <Box
+                        onClick={() => localAI.clearFallback?.()}
+                        sx={{
+                          cursor: "pointer",
+                          color: t.starFaint,
+                          "&:hover": { color: t.star },
+                          userSelect: "none",
+                        }}
+                      >
+                        ✕
+                      </Box>
+                    </Box>
+                  )}
                   {localAI.messages.map((msg, i) => (
                     <Box
                       key={i}

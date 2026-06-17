@@ -35,7 +35,7 @@
 3. **[`docs/conventions/001-comments-zh-CN.md`](docs/conventions/001-comments-zh-CN.md)** —— **代码注释统一简体中文**（必读）
 4. **[`docs/architecture-decisions/0002-chat-ipc-streaming.md`](docs/architecture-decisions/0002-chat-ipc-streaming.md)** —— Chat IPC 流式架构
 5. **[`docs/architecture-decisions/0001-provider-system.md`](docs/architecture-decisions/0001-provider-system.md)** —— Provider 系统设计
-6. **[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md)** —— Default-Model 显式状态管理（✅ Stage 1+2+3 已落地，Stage 4 待推）
+6. **[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md)** —— Default-Model 显式状态管理（✅ Stage 1+2+3+4 已落地）
 7. **[`docs/game-design.md`](docs/game-design.md)** —— 游戏化视觉与交互（涉及 UI 改动必读）
 
 ---

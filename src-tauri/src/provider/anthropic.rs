@@ -1,49 +1,31 @@
 //! Anthropic 家族 + Anthropic 兼容家族（Custom: anthropic_compat）嘅流式 chat。
 //!
-//! 协议：`POST {base_url}/v1/messages` 携带 `stream: true`，响应为
-//! `Content-Type: text/event-stream`。Anthropic 嘅 SSE 与 OpenAI
-//! 不同——它是 **event-based** 格式：
-//!
-//!   event: message_start
-//!   data: {"type":"message_start","message":{...}}
-//!
-//!   event: content_block_start
-//!   data: {"type":"content_block_start",...}
-//!
-//!   event: content_block_delta
-//!   data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
-//!
-//!   event: content_block_stop
-//!   data: {...}
-//!
-//!   event: message_delta
-//!   data: {"type":"message_delta","delta":{...},"usage":{"output_tokens":N}}
-//!
-//!   event: message_stop
-//!   data: {"type":"message_stop"}
-//!
-//! 终止标志：`message_stop`。
+//! 用 `anthropic-sdk-rust` 0.1.1 SDK 作为客户端实现，不再手写
+//! event-based SSE parser。SDK 设计：
+//!   - `MessageStream` 唔系 `Stream` trait 实现——只暴露 callback-based
+//!     API（`.on_text` / `.on_error` / `.on_final_message`）同 `.final_message().await`
+//!   - SDK 内部 `eventsource-stream` crate + tokio `broadcast` 通道处理 SSE
+//!   - 0.1.1 API 仍在演进，ContentBlock enum 暂冇 `Thinking` 变体——
+//!     minimax Anthropic 兼容端点嘅 thinking block 会被 serde 跳过，
+//!     我们只拿 text delta。完整 thinking 文本如需落地应改 SDK enum。
 //!
 //! 覆盖 4 家族中嘅：
 //!   - Anthropic（官方 api.anthropic.com）
 //!   - Custom（kind=anthropic_compat，base_url 由用户填——例如
 //!     `https://api.minimaxi.com/anthropic` 之类 Anthropic 兼容服务）
 //!
-//! 实现要点（基于对 Mini-Agent `anthropic_client.py` 嘅理解）：
-//!   - 必须 BufReader + read_line 流式逐行读，**不可**一次性
-//!     `response.text()`——Anthropic 兼容服务（特别是 minimaxi 之类）
-//!     嘅 SSE 边界会 lazy flush 导致 hang。
-//!   - event/data 两行配对累积 payload，遇空行时一次解析。
-//!   - 错误响应走 `response.text()` 一次性读（非流式）。
-//!   - 必传 header：`x-api-key` + `anthropic-version: 2023-06-01`。
+//! 架构：blocking `StreamCallback` ↔ mpsc::sync_channel ↔ async forwarder
+//! ↔ Channel<ChatEvent>（参见 skill `tauri-react-dualmode`）。
 //!
 //! 历史曾有 `ANTHROPIC_MODELS` 11 条硬编码常量——已彻底移除。
 //! 全部走 `GET /v1/models` 实时拉取。
 
 use crate::provider::{ChatRequest, ChatResponse, LLMClient, StreamCallback, Usage};
-use reqwest::blocking::Client;
-use serde::Deserialize;
-use std::io::{BufRead, BufReader};
+use anthropic_sdk::config::ClientConfig;
+use anthropic_sdk::types::messages::{
+    MessageCreateBuilder, Role as AnthropicRole,
+};
+use anthropic_sdk::Anthropic;
 
 /// 从 Anthropic 的 `/v1/models` 端点拉取实时模型列表。
 ///
@@ -56,7 +38,7 @@ pub fn list_models(base_url: &str, api_key: &str) -> Result<Vec<String>, String>
         format!("{}/v1/models", base)
     };
 
-    let client = Client::new();
+    let client = reqwest::blocking::Client::new();
     let response = client
         .get(&url)
         .header("x-api-key", api_key)
@@ -81,10 +63,243 @@ pub fn list_models(base_url: &str, api_key: &str) -> Result<Vec<String>, String>
     Ok(models)
 }
 
+/// 构造 Anthropic SDK 客户端（带自定义 base_url）。
+fn build_client(api_key: &str, base_url: &str) -> Result<Anthropic, String> {
+    let config = ClientConfig::new(api_key).with_base_url(base_url);
+    config
+        .validate()
+        .map_err(|e| format!("Anthropic 配置无效：{e}"))?;
+    Anthropic::with_config(config).map_err(|e| format!("Anthropic 客户端构造失败：{e}"))
+}
+
+/// 把 Nova 内部 ChatRequest 拆成 SDK MessageCreateBuilder。
+///
+/// system prompt 走 `.system(s)`；user/assistant 走 `.user(s)` / `.assistant(s)`。
+/// SDK 嘅 `MessageContent` enum 接受 `&str`（impl `From<&str>`）。
+fn build_sdk_params(
+    model: &str,
+    max_tokens: u32,
+    temperature: f32,
+    system_prompt: Option<&str>,
+    messages: &[crate::provider::ChatMessage],
+) -> MessageCreateBuilder {
+    let mut builder = MessageCreateBuilder::new(model, max_tokens).temperature(temperature);
+    if let Some(s) = system_prompt {
+        if !s.trim().is_empty() {
+            builder = builder.system(s);
+        }
+    }
+    for m in messages {
+        let role = match m.role.as_str() {
+            "assistant" => AnthropicRole::Assistant,
+            // 包含 "user" + 未识别 fallback
+            _ => AnthropicRole::User,
+        };
+        let content = m.content.as_str();
+        builder = match role {
+            AnthropicRole::Assistant => builder.assistant(content),
+            AnthropicRole::User => builder.user(content),
+        };
+    }
+    builder
+}
+
+/// 流式 chat：用 anthropic-sdk callback-based stream + mpsc 桥接。
+///
+/// `MessageStream` 0.1.1 唔系 `Stream` trait 实现——必须用
+/// `.on_text(callback).final_message().await` 模式。`on_text` 接受
+/// sync callback `Fn(&str, &str)`，正合我哋 mpsc sync_channel 模式。
+///
+/// 内部用专属 tokio runtime 跑 SDK 异步流（避免污染 Tauri runtime），
+/// callback 同步 push delta 到 mpsc；当前 tokio runtime 消费 mpsc
+/// 推送到 `on_delta` 同步回调（再经 `tauri::ipc::Channel` 出 webview）。
+fn stream_via_sdk(
+    api_key: &str,
+    base_url: &str,
+    request: ChatRequest,
+    on_delta: StreamCallback,
+) -> Result<ChatResponse, String> {
+    use std::sync::mpsc;
+
+    let api_key = api_key.to_string();
+    let base_url = base_url.to_string();
+
+    let (tx, rx) = mpsc::sync_channel::<String>(64);
+    // 收集最后 usage：MessageDelta 事件触发；final_message 兜底
+    let (usage_tx, usage_rx) = mpsc::sync_channel::<Usage>(4);
+
+    let (model, max_tokens, temperature, system_prompt, messages) = extract_request(&request);
+
+    let stream_handle = std::thread::spawn(move || -> Result<(), String> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("build stream runtime: {e}"))?;
+        rt.block_on(async {
+            let client = match build_client(&api_key, &base_url) {
+                Ok(c) => c,
+                Err(e) => return Err(e),
+            };
+            let params = build_sdk_params(
+                &model,
+                max_tokens,
+                temperature,
+                system_prompt.as_deref(),
+                &messages,
+            );
+            let stream = match client.messages().create_stream(params.build()).await {
+                Ok(s) => s,
+                Err(e) => return Err(format!("Anthropic SDK stream 创建失败：{e}")),
+            };
+
+            // 1. 装 on_text callback——text delta 同步推到 mpsc
+            // 2. 装 on_stream_event callback——MessageDelta 事件拎 usage
+            // 3. .final_message().await 阻塞等完——返回 final Message 拿 usage
+            //    （即便 on_stream_event 已先收到，亦不冲突：final_message 是兜底）
+            let tx_clone = tx.clone();
+            let usage_tx_clone = usage_tx.clone();
+            let final_message = stream
+                .on_text(move |delta: &str, _snapshot: &str| {
+                    if tx_clone.send(delta.to_string()).is_err() {
+                        // 接收端已 drop，提前终止
+                    }
+                })
+                .on_stream_event(move |event, _snapshot| {
+                    if let anthropic_sdk::MessageStreamEvent::MessageDelta { usage, .. } = event {
+                        let _ = usage_tx_clone.send(Usage {
+                            prompt_tokens: usage.input_tokens.unwrap_or(0),
+                            completion_tokens: usage.output_tokens,
+                            total_tokens: usage.input_tokens.unwrap_or(0) + usage.output_tokens,
+                        });
+                    }
+                })
+                .final_message()
+                .await
+                .map_err(|e| format!("Anthropic stream 完成失败：{e}"))?;
+
+            // 兜底：final_message 嘅 usage（如果 on_stream_event 漏掉）
+            let _ = usage_tx.send(Usage {
+                prompt_tokens: final_message.usage.input_tokens,
+                completion_tokens: final_message.usage.output_tokens,
+                total_tokens: final_message.usage.total_tokens(),
+            });
+            Ok::<_, String>(())
+        })?;
+        Ok(())
+    });
+
+    // 当前 runtime 同步消费 mpsc
+    let rt = tokio::runtime::Handle::current();
+    let mut full_text = String::new();
+    let _ = rt.block_on(async {
+        tokio::task::block_in_place(|| {
+            while let Ok(delta) = rx.recv() {
+                full_text.push_str(&delta);
+                if on_delta(&delta).is_err() {
+                    break;
+                }
+            }
+        });
+    });
+
+    let usage = usage_rx.recv().ok();
+    stream_handle
+        .join()
+        .map_err(|_| "stream thread join failed".to_string())??;
+
+    Ok(ChatResponse {
+        content: full_text,
+        model: request.model,
+        usage,
+    })
+}
+
+/// 非流式 fallback：调 `/v1/messages` 不带 `stream`，一次性返回。
+fn blocking_via_sdk(
+    api_key: &str,
+    base_url: &str,
+    request: ChatRequest,
+) -> Result<ChatResponse, String> {
+    let api_key = api_key.to_string();
+    let base_url = base_url.to_string();
+
+    let (model, max_tokens, temperature, system_prompt, messages) = extract_request(&request);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("build runtime: {e}"))?;
+    let response = match rt.block_on(async {
+        let client = match build_client(&api_key, &base_url) {
+            Ok(c) => c,
+            Err(e) => return Err(e),
+        };
+        let params = build_sdk_params(
+            &model,
+            max_tokens,
+            temperature,
+            system_prompt.as_deref(),
+            &messages,
+        );
+        match client.messages().create(params.build()).await {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Anthropic 兼容 provider 调用失败：{e}")),
+        }
+    }) {
+        Ok(r) => r,
+        Err(e) => return Err(e),
+    };
+
+    // ContentBlock 当前 enum 冇 Thinking 变体，text 抽取用 pattern match
+    let mut content = String::new();
+    for block in &response.content {
+        if let anthropic_sdk::ContentBlock::Text { text } = block {
+            content.push_str(text.as_str());
+        }
+    }
+
+    let usage = Usage {
+        prompt_tokens: response.usage.input_tokens,
+        completion_tokens: response.usage.output_tokens,
+        total_tokens: response.usage.total_tokens(),
+    };
+
+    Ok(ChatResponse {
+        content,
+        model: request.model,
+        usage: Some(usage),
+    })
+}
+
+/// 把 Nova 内部 ChatRequest 拆成 SDK 调用所需参数。
+fn extract_request(
+    request: &ChatRequest,
+) -> (String, u32, f32, Option<String>, Vec<crate::provider::ChatMessage>) {
+    let model = request.model.clone();
+    let max_tokens = request.max_tokens.unwrap_or(2048);
+    let temperature = request.temperature.unwrap_or(0.7);
+
+    // 拎 system prompt（如果有）
+    let system_prompt = request
+        .messages
+        .iter()
+        .find(|m| m.role == "system")
+        .map(|m| m.content.clone());
+
+    // 滤走 system（SDK 走独立 system() builder method）
+    let messages: Vec<crate::provider::ChatMessage> = request
+        .messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .cloned()
+        .collect();
+
+    (model, max_tokens, temperature, system_prompt, messages)
+}
+
 pub struct AnthropicClient {
     api_key: String,
     base_url: String,
-    http: Client,
 }
 
 impl AnthropicClient {
@@ -92,193 +307,7 @@ impl AnthropicClient {
         Self {
             api_key: api_key.to_string(),
             base_url: base_url.to_string(),
-            http: Client::new(),
         }
-    }
-
-    /// 流式 chat：POST `/v1/messages` 带 `stream: true`，按 event-based
-    /// SSE 逐块把 `content_block_delta` 事件的 `delta.text` 推给
-    /// `on_delta`。终止事件 `message_stop` 后再尝试取一次
-    /// `message_delta.usage`（Anthropic 把 usage 放在终止事件里）。
-    fn chat_stream_inner(
-        &self,
-        request: ChatRequest,
-        on_delta: StreamCallback,
-    ) -> Result<ChatResponse, String> {
-        let url = format!("{}/v1/messages", self.base_url);
-
-        let body = serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-            "temperature": request.temperature.unwrap_or(0.7),
-            "max_tokens": request.max_tokens.unwrap_or(2048),
-            "stream": true,
-        });
-
-        let response = self
-            .http
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("Content-Type", "application/json")
-            .header("anthropic-version", "2023-06-01")
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .map_err(|e| format!("Anthropic 请求失败：{}", e))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().unwrap_or_default();
-            return Err(format!("Anthropic 返回 {}：{}", status, text));
-        }
-
-        let mut full_text = String::new();
-        let mut usage: Option<Usage> = None;
-
-        // Anthropic SSE 事件类型：
-        //   message_start        - 含 message id/model/usage.input_tokens
-        //   content_block_start
-        //   content_block_delta  - 含 delta.text（要流出去的内容）
-        //   content_block_stop
-        //   message_delta        - 含 usage.output_tokens
-        //   message_stop         - 终止
-        //   ping                 - 心跳，忽略
-        // 我们关心的是 content_block_delta 里的 text 与 message_delta
-        // 里的 usage。
-        //
-        // 协议：每个事件由 `event: NAME` + `data: JSON` + 空行 组成。
-        // 多行 data 用 `data: X\ndata: Y` 累积（罕见但 SSE 标准允许）。
-        let mut reader = BufReader::new(response);
-        let mut buf = String::new();
-        let mut event_name = String::new();
-        let mut data_lines: Vec<String> = Vec::new();
-
-        loop {
-            buf.clear();
-            let n = reader
-                .read_line(&mut buf)
-                .map_err(|e| format!("Anthropic SSE 读取失败：{}", e))?;
-            if n == 0 {
-                break; // 流结束
-            }
-            let line = buf.trim_end();
-            if let Some(rest) = line
-                .strip_prefix("event: ")
-                .or_else(|| line.strip_prefix("event:"))
-            {
-                event_name = rest.trim().to_string();
-                continue;
-            }
-            if let Some(rest) = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-            {
-                data_lines.push(rest.trim().to_string());
-                continue;
-            }
-            // 空行 = 事件边界，把累积的 data 解析一次
-            if line.is_empty() && !data_lines.is_empty() {
-                let payload = data_lines.join("\n");
-                data_lines.clear();
-                let json: serde_json::Value = match serde_json::from_str(&payload) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        event_name.clear();
-                        continue;
-                    }
-                };
-                match event_name.as_str() {
-                    "content_block_delta" => {
-                        if let Some(text) = json["delta"]["text"].as_str() {
-                            full_text.push_str(text);
-                            on_delta(text)?;
-                        }
-                    }
-                    "message_delta" => {
-                        if let Some(u) = json["usage"].as_object() {
-                            let input = u
-                                .get("input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0) as u32;
-                            let output = u
-                                .get("output_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0) as u32;
-                            usage = Some(Usage {
-                                prompt_tokens: input,
-                                completion_tokens: output,
-                                total_tokens: input + output,
-                            });
-                        }
-                    }
-                    "message_stop" => {
-                        // 终止事件，立即结束读取
-                        event_name.clear();
-                        return Ok(ChatResponse {
-                            content: full_text,
-                            model: request.model,
-                            usage,
-                        });
-                    }
-                    _ => {}
-                }
-                event_name.clear();
-            }
-        }
-
-        Ok(ChatResponse {
-            content: full_text,
-            model: request.model,
-            usage,
-        })
-    }
-
-    /// 非流式 fallback：调 `/v1/messages` 不带 `stream`，一次性返回。
-    /// 保留给 `chat()` 调用方（list_models 等不走流式）。
-    pub fn chat_blocking(&self, request: ChatRequest) -> Result<ChatResponse, String> {
-        #[derive(Deserialize)]
-        struct AnthropicUsage {
-            input_tokens: Option<u32>,
-            output_tokens: Option<u32>,
-        }
-
-        let url = format!("{}/v1/messages", self.base_url);
-        let body = serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-            "temperature": request.temperature.unwrap_or(0.7),
-            "max_tokens": request.max_tokens.unwrap_or(2048),
-        });
-
-        let response = self
-            .http
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("Content-Type", "application/json")
-            .header("anthropic-version", "2023-06-01")
-            .json(&body)
-            .send()
-            .map_err(|e| e.to_string())?;
-
-        let json: serde_json::Value = response.json().map_err(|e| e.to_string())?;
-        let content = json["content"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let usage = json
-            .get("usage")
-            .and_then(|u| serde_json::from_value::<AnthropicUsage>(u.clone()).ok())
-            .map(|u| Usage {
-                prompt_tokens: u.input_tokens.unwrap_or(0),
-                completion_tokens: u.output_tokens.unwrap_or(0),
-                total_tokens: u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
-            });
-
-        Ok(ChatResponse {
-            content,
-            model: request.model,
-            usage,
-        })
     }
 }
 
@@ -288,7 +317,7 @@ impl LLMClient for AnthropicClient {
     }
 
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, String> {
-        self.chat_blocking(request)
+        blocking_via_sdk(&self.api_key, &self.base_url, request)
     }
 
     fn chat_stream(
@@ -296,6 +325,6 @@ impl LLMClient for AnthropicClient {
         request: ChatRequest,
         on_delta: StreamCallback,
     ) -> Result<ChatResponse, String> {
-        self.chat_stream_inner(request, on_delta)
+        stream_via_sdk(&self.api_key, &self.base_url, request, on_delta)
     }
 }
