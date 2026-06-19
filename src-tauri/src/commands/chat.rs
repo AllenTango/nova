@@ -1,6 +1,6 @@
 use crate::commands::settings::DefaultTarget;
 use crate::db::Database;
-use crate::nova_config;
+use crate::nova_config::{self, FamilyKind};
 use crate::providers;
 use crate::provider::{ChatMessage, ChatRequest, ProviderFactory};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,9 @@ struct ResolvedTarget {
     /// 出站嘅 entry id（用于 fallback 时区分 provider 切换 vs 仅 model 切换）。
     /// Custom family 时 = user-supplied id；preset 时 = preset id (openai/anthropic/ollama)。
     provider_id: String,
+    /// 路由到哪个 transport family。Custom provider 时 family 形如
+    /// "custom-openai"，需靠 kind 决定用 OpenAI transport 还是 Anthropic transport。
+    kind: FamilyKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -93,6 +96,7 @@ fn resolve_credentials(
         base_url: Some(entry.base_url.clone()),
         model: mid.to_string(),
         provider_id: entry.id.clone(),
+        kind: entry.kind.clone(),
     })
 }
 
@@ -334,10 +338,18 @@ async fn try_fallback_and_retry(
     let provider = target.provider.clone();
     let api_key = target.api_key.clone();
     let base_url = target.base_url.clone();
+    let kind = target.kind.clone();
+
+    // Custom provider 按 kind 映射到 transport provider（统一 String 避免生命周期）
+    let transport_provider: String = match kind {
+        FamilyKind::OpenaiCompat => "openai".to_string(),
+        FamilyKind::AnthropicCompat => "anthropic".to_string(),
+        FamilyKind::Preset => provider.clone(),
+    };
 
     // 1. 拉候选 model list（spawn_blocking：list_models 内部用
     //    reqwest::blocking::Client，从 async 上下文直接调会 panic）
-    let p_for_blocking = provider.clone();
+    let p_for_blocking = transport_provider.clone();
     let k_for_blocking = api_key.clone();
     let b_for_blocking = base_url.clone();
     let candidates = tokio::task::spawn_blocking(move || {
@@ -393,7 +405,7 @@ async fn try_fallback_and_retry(
     });
 
     // 5. 用新 model 重试 chat（仅一次）
-    let client = ProviderFactory::create_client(&provider, api_key.as_deref(), base_url.as_deref())?;
+    let client = ProviderFactory::create_client(&transport_provider, api_key.as_deref(), base_url.as_deref())?;
 
     let new_request = ChatRequest {
         messages: messages.to_vec(),
@@ -492,8 +504,15 @@ pub async fn ai_chat(
         target.provider_id,
     );
 
+    // Custom provider（kind=OpenaiCompat/AnthropicCompat）按 kind 映射到实际 transport。
+    // Preset provider（kind=Preset）直接用 family。
+    let transport_provider = match target.kind {
+        FamilyKind::OpenaiCompat => "openai",
+        FamilyKind::AnthropicCompat => "anthropic",
+        FamilyKind::Preset => &target.provider,
+    };
     let client = ProviderFactory::create_client(
-        &target.provider,
+        transport_provider,
         target.api_key.as_deref(),
         target.base_url.as_deref(),
     )?;
