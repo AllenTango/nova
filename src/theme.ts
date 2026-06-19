@@ -41,6 +41,15 @@ const MOTION = {
   },
 };
 
+// ── Content Width Tokens ─────────────────────────────────────────────
+const CONTENT = {
+  // 可视内容区最大宽度（约束可读性，非满屏撑满）
+  narrow: 640,   // 紧凑表单 / 内嵌面板
+  base:   960,   // 标准设置面板 / 表单
+  wide:  1280,   // Dashboard 主内容 / 列表
+  full:  1600,   // 最大上限（防阅读线过宽）
+};
+
 const T = {
   // Dark — deep space
   dark: {
@@ -332,4 +341,4 @@ const buildTheme = (mode: "dark" | "light") => {
 export const darkTheme = buildTheme("dark");
 export const lightTheme = buildTheme("light");
 export const tokens = T.dark; // backward-compat default export
-export { T, FONT, BREAK, SIDEBAR, STARMAP, MOTION };
+export { T, FONT, BREAK, SIDEBAR, STARMAP, MOTION, CONTENT };

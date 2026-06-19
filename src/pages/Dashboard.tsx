@@ -19,7 +19,7 @@ import {
   DarkMode as MoonIcon,
 } from "@mui/icons-material";
 import { api, ProjectKind } from "../api/client";
-import { T, FONT } from "../theme";
+import { T, FONT, CONTENT } from "../theme";
 import Starfield from "../components/Starfield";
 import Observatory from "../components/Observatory";
 import AIChatPanel from "../components/AIChatPanel";
@@ -143,7 +143,7 @@ export default function Dashboard({
         sx={{
           position: "relative",
           zIndex: 1,
-          maxWidth: 1200,
+          maxWidth: CONTENT.wide,
           mx: "auto",
           px: { xs: 3, md: 6 },
           py: 4,
@@ -434,7 +434,7 @@ function EmptyHero({
           fontWeight: 400,
           color: t.star,
           letterSpacing: "-0.04em",
-          maxWidth: 720,
+          maxWidth: CONTENT.narrow,
         }}
       >
         把第一篇文字，
@@ -448,7 +448,7 @@ function EmptyHero({
           mt: 2,
           color: t.starDim,
           fontSize: "1.05rem",
-          maxWidth: 520,
+          maxWidth: CONTENT.narrow,
           lineHeight: 1.6,
         }}
       >

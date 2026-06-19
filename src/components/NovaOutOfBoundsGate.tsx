@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Box, Button, Typography } from "@mui/material";
-import { T, FONT } from "../theme";
+import { T, FONT, CONTENT } from "../theme";
 import { isTauri } from "../api/client";
 
 /**
@@ -110,7 +110,7 @@ function OutOfBoundsScreen({ themeMode }: { themeMode: "dark" | "light" }) {
     >
       <Box
         sx={{
-          maxWidth: 480,
+          maxWidth: CONTENT.narrow,
           textAlign: "center",
           display: "flex",
           flexDirection: "column",

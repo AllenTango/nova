@@ -37,7 +37,7 @@ import {
   FamilyKind,
   ChatOverrides,
 } from "../api/client";
-import { T, FONT } from "../theme";
+import { T, FONT, CONTENT } from "../theme";
 import Starfield from "../components/Starfield";
 
 // Picker entries for the unified "Add model provider" radio dialog.
@@ -734,7 +734,7 @@ export default function SettingsPage({
         sx={{
           position: "relative",
           zIndex: 1,
-          maxWidth: 920,
+          maxWidth: CONTENT.base,
           mx: "auto",
           px: { xs: 3, md: 6 },
           py: 4,
@@ -764,7 +764,7 @@ export default function SettingsPage({
           </Box>{" "}
           的链路
         </Typography>
-        <Typography variant="body2" sx={{ color: t.starDim, mb: 4, maxWidth: 620 }}>
+        <Typography variant="body2" sx={{ color: t.starDim, mb: 4, maxWidth: CONTENT.base }}>
           配置 AI 通讯链路与本地端口坐标。所有数据写入{" "}
           <Box component="code" sx={{ fontFamily: FONT.mono, color: t.starFaint }}>
             ~/.nova/config.json

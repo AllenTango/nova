@@ -32,7 +32,7 @@ import {
   RocketLaunch as UpgradeIcon,
 } from "@mui/icons-material";
 import { api, Note, Post } from "../api/client";
-import { T, FONT, SIDEBAR } from "../theme";
+import { T, FONT, SIDEBAR, CONTENT } from "../theme";
 import { useBreakpoint } from "../hooks/useBreakpoint";
 import MarkdownPreview from "../components/MarkdownPreview";
 import AIChatPanel from "../components/AIChatPanel";
@@ -956,7 +956,7 @@ export default function ProjectEditor({
               variant="body2"
               sx={{
                 color: t.starFaint,
-                maxWidth: 320,
+                maxWidth: CONTENT.narrow,
                 textAlign: "center",
               }}
             >
