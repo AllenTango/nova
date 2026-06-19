@@ -1,6 +1,8 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getPosts } from '../lib/posts';
+import { guardPage } from '../lib/site-config';
+guardPage('gallery');
 const posts = getPosts().filter((p) => p.data.type === 'gallery');
 ---
 <BaseLayout title="相册" active="gallery">

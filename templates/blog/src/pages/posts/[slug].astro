@@ -1,14 +1,20 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getPosts, getPostBySlug } from '../../lib/posts';
+import { activePages } from '../../lib/site-config';
+import { guardPage } from '../../lib/site-config';
 
+// 过滤：只生成 activePages 中声明类型的 post 路径
 export async function getStaticPaths() {
-  const posts = getPosts();
+  const posts = getPosts().filter((p) => activePages.includes(p.data.type));
   return posts.map((post) => ({ params: { slug: post.slug }, props: { post } }));
 }
 
 const { post: pathPost } = Astro.props;
 const post = pathPost ?? getPostBySlug(Astro.params.slug!);
+if (!activePages.includes(post.data.type)) {
+  guardPage(post.data.type);
+}
 ---
 <BaseLayout title={post.data.title} active={post.data.type === 'blog' ? 'blog' : post.data.type === 'vlog' ? 'vlog' : 'gallery'}>
   <article class="prose">

@@ -32,13 +32,10 @@ pub fn apply_template(template: &str, target: &Path) -> Result<(), String> {
 }
 
 fn resolve_template(template: &str) -> &str {
+    // ADR 0005: 所有模板 ID 统一指向 blog 模板（含所有页面类型）
+    // 页面组合由 site.yaml 的 pages 字段控制
     match template {
-        "blog" => "blog",
-        "gallery" => "blog",
-        "vlog" => "blog",
-        "blog-gallery" => "blog",
-        "corporate" => "blog",
-        "agent-home" => "blog",
+        "blog" | "gallery" | "vlog" | "blog-gallery" | "corporate" | "agent-home" => "blog",
         _ => "blog",
     }
 }

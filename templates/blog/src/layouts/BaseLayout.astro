@@ -1,5 +1,16 @@
 ---
 import '../styles/site.css';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const raw = readFileSync(join(__dirname, '../../site.yaml'), 'utf-8');
+// 简单 YAML 解析：提取 pages: 下的所有 - xxx 行
+const pagesMatch = raw.match(/^pages:\s*\n([\s\S]*?)(?:\n\w|\n$)/m);
+const activePages: string[] = pagesMatch
+  ? pagesMatch[1].replace(/^\s*-\s+/gm, '').trim().split(/\s+/).filter(Boolean)
+  : ['blog', 'about'];
 
 interface Props {
   title?: string;
@@ -7,13 +18,18 @@ interface Props {
 }
 
 const { title = 'Nova Site', active = 'home' } = Astro.props;
-const nav = [
-  ['home', '/', '首页'],
-  ['blog', '/blog/', '随笔'],
-  ['vlog', '/vlog/', '影像'],
-  ['gallery', '/gallery/', '相册'],
-  ['about', '/about/', '关于'],
-] as const;
+
+const NAV_MAP: Record<string, [string, string, string]> = {
+  index:   ['home',   '/',        '首页'],
+  blog:    ['blog',   '/blog/',   '随笔'],
+  vlog:    ['vlog',  '/vlog/',   '影像'],
+  gallery: ['gallery','/gallery/','相册'],
+  about:   ['about', '/about/',  '关于'],
+};
+
+const nav = activePages
+  .filter((k) => NAV_MAP[k])
+  .map((k) => ({ key: NAV_MAP[k][0], href: NAV_MAP[k][1], label: NAV_MAP[k][2] }));
 ---
 
 <!doctype html>
@@ -27,8 +43,8 @@ const nav = [
     <header class="site-header">
       <a class="brand" href="/">✦ Nova</a>
       <nav class="nav-links" aria-label="主导航">
-        {nav.map(([key, href, label]) => (
-          <a class:list={["nav-link", { active: active === key }]} href={href}>{label}</a>
+        {nav.map((item) => (
+          <a class:list={["nav-link", { active: active === item.key }]} href={item.href}>{item.label}</a>
         ))}
       </nav>
     </header>

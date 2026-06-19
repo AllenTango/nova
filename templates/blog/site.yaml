@@ -1,8 +1,12 @@
-name: Nova Blog
+name: Nova Site
 kind: site
-template: blog
+template: universal
 theme: dracula
-sections:
+# 页面组合声明（ADR 0005）
+# 最小组合：blog + about
+# 所有页面：index, blog, vlog, gallery, about
+pages:
+  - index
   - blog
   - vlog
   - gallery

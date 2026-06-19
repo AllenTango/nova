@@ -1,6 +1,12 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getPosts } from '../lib/posts';
+import { activePages, guardPage } from '../lib/site-config';
+
+if (!activePages.includes('index')) {
+  // 无 index 页面时，redirect 到 blog（最常见首选项）
+  return Astro.redirect('/blog/', 301);
+}
 
 const allPosts = getPosts();
 const latest = allPosts.slice(0, 6);

@@ -1,5 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import { guardPage } from '../lib/site-config';
+guardPage('about');
 ---
 <BaseLayout title="关于" active="about">
   <article class="prose standalone">
