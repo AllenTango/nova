@@ -37,7 +37,8 @@
 5. **[`docs/architecture-decisions/0002-chat-ipc-streaming.md`](docs/architecture-decisions/0002-chat-ipc-streaming.md)** —— Chat IPC 流式架构
 6. **[`docs/architecture-decisions/0001-provider-system.md`](docs/architecture-decisions/0001-provider-system.md)** —— Provider 系统设计
 7. **[`docs/architecture-decisions/0003-default-model.md`](docs/architecture-decisions/0003-default-model.md)** —— Default-Model 显式状态管理（✅ Stage 1+2+3+4 已落地）
-8. **[`docs/game-design.md`](docs/game-design.md)** —— 游戏化视觉与交互（涉及 UI 改动必读）
+8. **[`docs/game-design.md`](docs/game-design.md)** —— 游戏化视觉与交互（涉及 UI 改动必读；**特别注意 §4.4 Bear 风格编辑器 + §9 响应式约束**）
+9. **[`docs/design-tokens.md`](docs/design-tokens.md)** —— 设计 token（涉及色彩/字号/断点改动必读；**特别注意 §2.3 对比度标注 + §4.2 断点 token**）
 
 ---
 
@@ -70,11 +71,24 @@
 - 编辑打字期间禁止持续 canvas 动效干扰
 - 星图低帧率、低密度、tab 隐藏暂停
 - 成就/彩蛋只在关键里程碑触发
+- **编辑器创建新条目 < 100ms**（无对话框、无网络请求阻塞——Bear 风格即时创建）
+- **自动保存 800ms debounce**，用户无需手动保存即可安全关闭窗口
+- **预览面板默认隐藏**——编辑空间优先；用户 toggle 展开
 
 ### 4.5 模板 fallback 行为
 
 - 6 个 template id（`blog` / `gallery` / `vlog` / `blog-gallery` / `corporate` / `agent-home`）**全部 fall back 到 blog**
 - 行业常态但 UX 应清楚（Settings/创建向导要让用户知道）
+
+### 4.6 响应式设计约束
+
+- Nova 窗口**最小宽度支持 768px**（桌面分屏场景）
+- 侧栏**必须在 < 768px 时折叠**（不可保持 280px 占满屏幕）
+- StarMap 高度**禁止 hardcode 固定像素值**——使用 `clamp()` 或 viewport 单位
+- 所有新增组件**必须验证 narrow / medium / wide 三档表现**
+- 断点 token 唯一来源：`src/theme/tokens.ts` 的 `BREAK` 对象
+- 测试方法：Tauri 窗口手动缩放到 768px 宽度验证
+- 完整响应式规范：[`docs/game-design.md`](docs/game-design.md) §9；token 定义：[`docs/design-tokens.md`](docs/design-tokens.md) §4.2
 
 ---
 
