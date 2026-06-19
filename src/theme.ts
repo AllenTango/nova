@@ -7,20 +7,54 @@ import { createTheme } from "@mui/material";
 // Bright mode is not a "light" theme afterthought — it's a real
 // counterpart with its own material language.
 
+// ── Breakpoint Tokens ──────────────────────────────────────────────
+// Nova 是 Tauri 桌面应用，"断点"对应用户缩小窗口或分屏场景。
+// BREAK token 必须与 MUI breakpoints.values 保持同步。
+const BREAK = {
+  narrow: 768,   // 窗口宽度 < 768px → 侧栏折叠为 icon rail
+  medium: 1024,  // 768-1024px → 紧凑侧栏
+  wide: 1280,    // >= 1280px → 完整布局
+};
+
+const SIDEBAR = {
+  wide: 260,     // >= medium (1024px+)
+  compact: 200,  // medium (768-1024px)
+  rail: 40,      // < narrow (768px) 折叠为 icon rail
+};
+
+const STARMAP = {
+  // StarMap 高度使用 clamp 替代固定 520px
+  height: "clamp(300px, 50vh, 600px)",
+};
+
+// ── Motion Tokens ──────────────────────────────────────────────────
+const MOTION = {
+  fast: "0.15s",
+  base: "0.25s",
+  slow: "0.4s",
+  intro: "1.1s",
+  reduced: "0.15s",        // prefers-reduced-motion 兜底
+  narrowFactor: 0.5,       // narrow 断点下 transform 时长减半
+  ease: {
+    smooth: "cubic-bezier(0.16, 1, 0.3, 1)",
+    snappy: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+};
+
 const T = {
   // Dark — deep space
   dark: {
     ink: "#0B0B14",       // deep void background
-    dust: "#1A1726",      // panel background
-    surface: "#2A2538",   // raised surface
+    dust: "#1E1A2E",      // panel background (ΔL ~7% from ink)
+    surface: "#2E2940",   // raised surface (ΔL ~7% from dust)
     border: "rgba(232, 228, 255, 0.08)",
     borderStrong: "rgba(232, 228, 255, 0.16)",
-    star: "#E8E4FF",      // primary text (starlight)
-    starDim: "#9A93B8",   // secondary text (distant stars)
-    starFaint: "#5C5677", // tertiary text
-    nova: "#FF6B6B",      // primary accent (the nova flare)
+    star: "#E8E4FF",      // primary text (starlight, ~15.5:1 AAA)
+    starDim: "#B0AAD0",   // secondary text (~6.2:1 AA enhanced)
+    starFaint: "#7A7399", // tertiary text (~4.5:1 AA minimum; 0.75rem+)
+    nova: "#FF6B6B",      // primary accent (the nova flare, ~5.8:1 AA)
     novaGlow: "rgba(255, 107, 107, 0.15)",
-    nebula: "#6B5BFF",    // secondary accent (nebula purple)
+    nebula: "#6B5BFF",    // secondary accent (nebula purple, ~3.5:1 AA large)
     nebulaGlow: "rgba(107, 91, 255, 0.18)",
     backdrop: "#0B0B14",
   },
@@ -53,6 +87,15 @@ const buildTheme = (mode: "dark" | "light") => {
   const t = T[mode];
 
   return createTheme({
+    breakpoints: {
+      values: {
+        xs: 0,
+        sm: BREAK.narrow,   // 768
+        md: BREAK.medium,  // 1024
+        lg: BREAK.wide,     // 1280
+        xl: 1536,
+      },
+    },
     palette: {
       mode,
       primary: { main: t.nova },
@@ -289,4 +332,4 @@ const buildTheme = (mode: "dark" | "light") => {
 export const darkTheme = buildTheme("dark");
 export const lightTheme = buildTheme("light");
 export const tokens = T.dark; // backward-compat default export
-export { T, FONT };
+export { T, FONT, BREAK, SIDEBAR, STARMAP, MOTION };

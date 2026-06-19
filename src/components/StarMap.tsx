@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Tooltip, Typography } from "@mui/material";
-import { T, FONT } from "../theme";
+import { T, FONT, STARMAP } from "../theme";
 import { layoutStars } from "../lib/starmap-layout";
 import { formatWordMass, type StarStage } from "../lib/words";
 
@@ -49,32 +49,35 @@ export default function StarMap({
   items,
   onSelect,
   themeMode,
-  height = 520,
+  height = STARMAP.height,
 }: {
   items: ReadonlyArray<StarMapItem>;
   onSelect: (id: string) => void;
   themeMode: "dark" | "light";
-  height?: number;
+  height?: string | number;
 }) {
   const t = T[themeMode];
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
-  const [size, setSize] = useState({ w: 800, h: height });
+  // SVG 高度默认值（当 height 为 CSS clamp 字符串时）
+  const svgHeight = typeof height === "number" ? height : 500;
+  const [size, setSize] = useState({ w: 800, h: svgHeight });
 
   // ResizeObserver to track container width (height is fixed).
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const computedHeight = typeof height === "number" ? height : svgHeight;
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
-        setSize({ w: e.contentRect.width, h: height });
+        setSize({ w: e.contentRect.width, h: computedHeight });
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [height]);
+  }, [height, svgHeight]);
 
   // Compute layout once per items identity.
   const positions = useMemo(

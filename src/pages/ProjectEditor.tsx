@@ -32,7 +32,8 @@ import {
   RocketLaunch as UpgradeIcon,
 } from "@mui/icons-material";
 import { api, Note, Post } from "../api/client";
-import { T, FONT } from "../theme";
+import { T, FONT, SIDEBAR } from "../theme";
+import { useBreakpoint } from "../hooks/useBreakpoint";
 import MarkdownPreview from "../components/MarkdownPreview";
 import AIChatPanel from "../components/AIChatPanel";
 import OrbitRing from "../components/OrbitRing";
@@ -442,6 +443,9 @@ export default function ProjectEditor({
     setEditTags("");
   };
 
+  const bp = useBreakpoint();
+  const sidebarWidth = bp === 'narrow' ? SIDEBAR.rail : bp === 'medium' ? SIDEBAR.compact : SIDEBAR.wide;
+
   const hasSelection = isCreating || selected;
 
   return (
@@ -454,10 +458,10 @@ export default function ProjectEditor({
       <Drawer
         variant="permanent"
         sx={{
-          width: 280,
+          width: sidebarWidth,
           flexShrink: 0,
           "& .MuiDrawer-paper": {
-            width: 280,
+            width: sidebarWidth,
             background: "transparent",
             borderRight: `1px solid ${t.border}`,
           },

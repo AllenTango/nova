@@ -20,10 +20,14 @@
  * 何时不要用：直接 `variant="body2"`，让 MUI 继承即可。
  */
 
-import { T as _T, FONT as _FONT } from "../theme";
+import { T as _T, FONT as _FONT, BREAK as _BREAK, SIDEBAR as _SIDEBAR, STARMAP as _STARMAP, MOTION as _MOTION } from "../theme";
 
 export const T = _T;
 export const FONT = _FONT;
+export const BREAK = _BREAK;
+export const SIDEBAR = _SIDEBAR;
+export const STARMAP = _STARMAP;
+export const MOTION = _MOTION;
 
 /**
  * 字体 tokens。尺寸以 rem 为单位。letter-spacing 和 font-family
@@ -119,24 +123,8 @@ export const SPACE = {
 
 /**
  * 动效 tokens——动画时序，匹配 §5 动效预算。
+ * 完整定义在 `src/theme.ts` 的 MOTION 对象；本文件 re-export 便于组件引用。
  */
-export const MOTION = {
-  /** 快速微交互（hover、press） */
-  fast: "0.15s",
-  /** 标准过渡（color、opacity） */
-  base: "0.25s",
-  /** 慢速过渡（size、transform） */
-  slow: "0.4s",
-  /** NovaIntro 仪式——总时长保持在 1.2s 以下（§5） */
-  intro: "1.1s",
-  /** reduced-motion 兜底 */
-  reduced: "0.15s",
-  /** 常用 easing 曲线 */
-  ease: {
-    smooth: "cubic-bezier(0.16, 1, 0.3, 1)",
-    snappy: "cubic-bezier(0.4, 0, 0.2, 1)",
-  },
-} as const;
 
 /**
  * 圆角 tokens。
